@@ -1,0 +1,4 @@
+Frame 1: blue truck at gate
+Frame 2: white car at driveway
+Frame 3: person walking at garage
+Frame 4: empty movement at perimeter

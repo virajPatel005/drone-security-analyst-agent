@@ -1,0 +1,7 @@
+Frame 1: blue truck at gate
+Frame 2: white car at garage
+Frame 3: person at driveway
+Frame 4: truck at perimeter
+Frame 5: empty driveway at driveway
+Frame 6: person loitering at gate
+Frame 7: truck leaving at garage
