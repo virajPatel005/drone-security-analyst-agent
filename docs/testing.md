@@ -30,3 +30,14 @@
 | LM Studio text reply / latency | `OK` / 0.29 s |
 | LM Studio image reply / latency | One-sentence traffic description / 7.63 s |
 | Image call with 128 max tokens | Failed to produce visible text; `content` empty, 125 reasoning tokens used |
+
+## YOLO Comparison: multiple_cars.jpg
+
+| Model | imgsz | Cars detected | Warmed-up ms/image |
+|-------|-------|---------------|--------------------|
+| yolo11n.pt | 640 | 22 | 15.22 |
+| yolo11n.pt | 1280 | 51 | 19.13 |
+| yolo11s.pt | 640 | 13 | 9.46 |
+| yolo11s.pt | 1280 | 35 | 21.68 |
+
+Note: single image, single timed run each, conf=0.25. Ground-truth count: not available. The scene is dense and the boxes overlap heavily, so an exact manual count was not feasible. Qualitative review by the developer: yolo11n at imgsz 1280 captured the most visible cars; the distant traffic remains partly undetected at every setting. Detection counts are therefore the model's own and are not validated against ground truth.

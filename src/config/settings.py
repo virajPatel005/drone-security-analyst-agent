@@ -22,6 +22,8 @@ LM_STUDIO_IMAGE_MAX_TOKENS = 512
 
 YOLO_MODEL_NAME = os.getenv("YOLO_MODEL_NAME", "yolo11n.pt")
 YOLO_DEVICE = os.getenv("YOLO_DEVICE", "cuda")
+YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "1280"))
+YOLO_CONF = float(os.getenv("YOLO_CONF", "0.25"))
 YOLO_CHECK_RUNS = 2
 
 TEST_IMAGES_DIR = PROJECT_ROOT / "data" / "test_images"
