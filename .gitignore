@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+lib/
+lib64/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Environment secrets
+.env
+.env.local
+.env.*.local
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+*.weights
+
+# Videos
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Assignment PDF
+*.pdf
+
+# OS
+.DS_Store
+Thumbs.db
