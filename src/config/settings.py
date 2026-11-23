@@ -27,6 +27,17 @@ YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "1280"))
 YOLO_CONF = float(os.getenv("YOLO_CONF", "0.25"))
 YOLO_CHECK_RUNS = 2
 
+TRACKER_CONFIG = os.getenv("TRACKER_CONFIG", "bytetrack.yaml")
+TRACKED_CLASSES = ("person", "car", "motorcycle", "bus", "truck", "bicycle")
+CLASS_CATEGORIES = {
+    class_name: "person" if class_name == "person" else "vehicle"
+    for class_name in TRACKED_CLASSES
+}
+MIN_TRACK_FRAMES = int(os.getenv("MIN_TRACK_FRAMES", "2"))
+LOST_FRAMES = int(os.getenv("LOST_FRAMES", "10"))
+ANNOTATED_OUTPUT_DIR = PROJECT_ROOT / "data" / "outputs"
+ANNOTATED_MAX_WIDTH = int(os.getenv("ANNOTATED_MAX_WIDTH", "720"))
+
 VIDEO_FILE_NAME = os.getenv("VIDEO_FILE_NAME", "16647865_2160_3840_30fps.mp4")
 VIDEOS_DIR = PROJECT_ROOT / "data" / "videos"
 VIDEO_PATH = VIDEOS_DIR / VIDEO_FILE_NAME

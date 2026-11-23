@@ -5,7 +5,7 @@ Status key: [ ] todo, [~] in progress, [x] done. Update this file at the end of 
 - [x] Step 0: Scaffolding (folders, .gitignore, .env.example, README skeleton, docs headings, first commit)
 - [x] Step 1: Environment and checks (Python venv in WSL, ultralytics, confirm CUDA is used, confirm WSL can reach the LM Studio server)
 - [x] Step 2: Sample video, frame sampling, simulated telemetry and simulated clock, plus text-only simulation mode
-- [ ] Step 3: YOLO + ByteTrack, convert tracks to events (appeared, entered zone, left, dwell time)
+- [x] Step 3: YOLO + ByteTrack, convert tracks to events (appeared, entered zone, left, dwell time)
 - [ ] Step 4: SQLite schema and indexing, queries by time and by object
 - [ ] Step 5: Rule-based alerts
 - [ ] Step 6: VLM on new-track crops via LM Studio, structured output, stored in the database

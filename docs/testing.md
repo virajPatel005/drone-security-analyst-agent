@@ -13,6 +13,7 @@
 | Synthetic-video sampler count and metadata | `.venv/bin/python -m pytest -q` | Pass: tiny OpenCV video in `tmp_path` |
 | Telemetry determinism and route cycling | `.venv/bin/python -m pytest -q` | Pass |
 | Text-mode parsing and midnight script | `.venv/bin/python -m pytest -q` | Pass: example `midnight_crossing.txt` crosses midnight |
+| Track events: confirmation, flicker, zone change, loss, end-of-video, ID reuse, class filter | `.venv/bin/python -m pytest -q` | Pass: 7 new event tests, no model/GPU needed; total `24 passed in 0.16s` |
 
 ## Measurements
 
@@ -64,3 +65,44 @@ Note: single image, single timed run each, conf=0.25. Ground-truth count: not av
 | Test suite | `17 passed in 0.18s` |
 
 Note: the video is 2160x3840 portrait. At 1 fps the pass took about 0.34 s per sampled frame (5.149 s / 15 frames), mostly 4K decode time. At 5 fps it sampled 71 frames in 25.451 s / 27.318 s, about 0.358 s / 0.385 s per sampled frame.
+
+## Step 3: Tracking and Event Measurements
+
+Command: `.venv/bin/python scripts/run_tracking.py` on `data/videos/16647865_2160_3840_30fps.mp4`.
+
+| Metric | Run 1 | Run 2 |
+|--------|-------|-------|
+| Sampled frames | 71 | 71 |
+| Video duration | 14.014 s | 14.014 s |
+| Sampling rate (71 / 14.014), not throughput | 5.066 fps | 5.066 fps |
+| YOLO + tracker time per frame, excl. decode/drawing | 84.82 ms (includes warm-up) | 64.38 ms |
+| Implied YOLO + tracker rate, excl. decode/drawing | about 11.8 fps | about 15.5 fps |
+| Device | `cuda:0` | `cuda:0` |
+| Event counts | 39 `appeared`, 91 `entered_zone`, 39 `left` | 39 `appeared`, 91 `entered_zone`, 39 `left` |
+| Observed track summaries | 52 | 52 |
+
+Note: `5.066 fps` is only the sampled-frame rate (`71 / 14.014 s`), not end-to-end throughput. YOLO + tracker processing was about **64 ms per frame (about 15 fps)** on the second run, excluding 4K video decode and annotation drawing. The first run's **84.8 ms** includes model/tracker warm-up.
+
+| Track class | Count |
+|-------------|-------|
+| car | 29 |
+| person | 19 |
+| motorcycle | 3 |
+| truck | 1 |
+
+| Annotated output | Value |
+|------------------|-------|
+| Path | `data/outputs/annotated_16647865_2160_3840_30fps.mp4` |
+| Resolution | 720 x 1280 |
+| FPS | 5.0 |
+| Frame count | 71 |
+| File size | 4,751,009 bytes (about 4.75 MB) |
+
+### Step 3 observations and issues
+
+- 52 distinct tracker IDs were observed, but only 39 appearances were confirmed. The 13 unconfirmed IDs were mostly one-frame flickers and were suppressed by `MIN_TRACK_FRAMES=2`.
+- Class assignment was unstable for at least one track: track 14 changed between `car` and `motorcycle`. Ultralytics track IDs also persisted across the simulated zone changes because the zone comes from patrol telemetry, not image position.
+- The 91 `entered_zone` events include the initial zone entry for each confirmed appearance plus repeated entries for long-lived tracks each time the 3 s patrol route changed. This is expected from the current definition of zone, but it is noisy.
+- The demo clip is a dense street scene, and visual review of a contact sheet showed heavily overlapping labels in the busiest part. Some boxes sat on bright foreground lamps/barriers and look suspect. Ground-truth validation is still pending, so detection accuracy is not validated.
+- On the first Step 3 run, Ultralytics automatically installed `lap==0.5.14` while initialising ByteTrack, printing `Ultralytics requirement ['lap>=0.5.12'] not found, attempting AutoUpdate`. ByteTrack needs `lap`, so `lap==0.5.14` is now pinned in `requirements.txt` after confirming the installed version with `pip freeze`.
+- The event-builder tests use fake observations only; they do not exercise CUDA, YOLO, ByteTrack, or the video writer.
