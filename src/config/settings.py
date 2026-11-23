@@ -21,13 +21,13 @@ LM_STUDIO_IMAGE_PROMPT = "Describe this image in one sentence."
 LM_STUDIO_TEXT_MAX_TOKENS = 16
 LM_STUDIO_IMAGE_MAX_TOKENS = 512
 
-YOLO_MODEL_NAME = os.getenv("YOLO_MODEL_NAME", "yolo11n.pt")
+YOLO_MODEL_NAME = os.getenv("YOLO_MODEL_NAME", "yolo11s.pt")
 YOLO_DEVICE = os.getenv("YOLO_DEVICE", "cuda")
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "1280"))
-YOLO_CONF = float(os.getenv("YOLO_CONF", "0.25"))
+YOLO_CONF = float(os.getenv("YOLO_CONF", "0.10"))
 YOLO_CHECK_RUNS = 2
 
-TRACKER_CONFIG = os.getenv("TRACKER_CONFIG", "bytetrack.yaml")
+TRACKER_CONFIG = os.getenv("TRACKER_CONFIG", "configs/bytetrack_0.9.yaml")
 TRACKED_CLASSES = ("person", "car", "motorcycle", "bus", "truck", "bicycle")
 CLASS_CATEGORIES = {
     class_name: "person" if class_name == "person" else "vehicle"
@@ -41,7 +41,7 @@ ANNOTATED_MAX_WIDTH = int(os.getenv("ANNOTATED_MAX_WIDTH", "720"))
 VIDEO_FILE_NAME = os.getenv("VIDEO_FILE_NAME", "16647865_2160_3840_30fps.mp4")
 VIDEOS_DIR = PROJECT_ROOT / "data" / "videos"
 VIDEO_PATH = VIDEOS_DIR / VIDEO_FILE_NAME
-SAMPLE_RATE_FPS = float(os.getenv("SAMPLE_RATE_FPS", "5.0"))
+SAMPLE_RATE_FPS = float(os.getenv("SAMPLE_RATE_FPS", "10.0"))
 SIM_START_DATETIME = datetime.fromisoformat(
     os.getenv("SIM_START_DATETIME", "2026-11-23T23:55:00")
 )

@@ -106,3 +106,44 @@ Note: `5.066 fps` is only the sampled-frame rate (`71 / 14.014 s`), not end-to-e
 - The demo clip is a dense street scene, and visual review of a contact sheet showed heavily overlapping labels in the busiest part. Some boxes sat on bright foreground lamps/barriers and look suspect. Ground-truth validation is still pending, so detection accuracy is not validated.
 - On the first Step 3 run, Ultralytics automatically installed `lap==0.5.14` while initialising ByteTrack, printing `Ultralytics requirement ['lap>=0.5.12'] not found, attempting AutoUpdate`. ByteTrack needs `lap`, so `lap==0.5.14` is now pinned in `requirements.txt` after confirming the installed version with `pip freeze`.
 - The event-builder tests use fake observations only; they do not exercise CUDA, YOLO, ByteTrack, or the video writer.
+
+## Step 3 tuning experiments (end of Step 3)
+
+### 5 fps / 10 fps / 15 fps with default bytetrack.yaml
+
+| rate fps | sampled frames | unique IDs | detections | confirmed | reapp(event) | gap IDs | gap events | mean fr/track | ≤3 fr | mean dur (s) | <0.5 s | track ms/fr | decode ms/fr | wall (s) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 5 | 71 | 52 | 813 | 39 | 1 | 20 | 52 | 15.63 | 22 | 3.75 | 19 | 43.4 | 341.8 | 28.1 |
+| 10 | 141 | 58 | 1732 | 59 | 7 | 32 | 89 | 29.86 | 17 | 3.60 | 19 | 42.1 | 356.2 | 57.9 |
+| 15 | 211 | 70 | 2677 | 84 | 16 | 44 | 128 | 38.24 | 14 | 3.05 | 23 | 44.3 | 354.2 | 86.7 |
+
+**Finding:** Higher fps did **not** reduce fragmentation; unique IDs increased 52 → 58 → 70, and mean track duration fell 3.75 → 3.60 → 3.05 s. Decode dominates (~350 ms/sampled frame, 8–10× the YOLO time).
+
+### match_thresh 0.8 vs 0.9 (at 10 fps)
+
+| config | unique IDs | mean dur (s) | ≤3 fr | <0.5 s | gap IDs | gap events | van frames/141 | low conf <0.35 |
+|---|---|---|---|---|---|---|---|---|
+| match 0.8 (baseline) | 58 | 3.60 | 17 | 19 | 32 | 89 | 141 (conf 0.873, class car) | n/a |
+| **match 0.9** | **48** | **4.50** | **11** | **11** | **29** | **102** | **141 (conf 0.873, class car)** | n/a |
+
+**Finding:** Looser association (0.9) cuts unique IDs 58 → 48, raises mean duration 3.60 → 4.50 s, halves sub-0.5 s tracks (19 → 11). The van is fully detected at conf 0.873.
+
+### Confidence / model combos (A, B, C) at 10 fps, match 0.9
+
+| run | model | conf | uniq IDs | detections | confirmed | gap IDs | gap events | mean dur (s) | <0.5 s | low conf <0.35 | short (<=5 fr) | van frames/141 | van class votes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **A** | yolo11n | 0.10 | **45** | 2331 | 56 | **18** | **36** | **5.68** | **7** | **7** | **4** (IDs 15,17,19,233) | 109 / 141 | `{'truck': 101, 'bus': 8}` (max conf **0.341**) |
+| **B** | yolo11s | 0.25 | 57 | 2561 | 64 | 40 | 144 | 5.41 | 8 | 4 (IDs 15,96) | 2 | 141 / 141 | `{'car': 141}` (max conf **0.873**) |
+| **C** | yolo11s | **0.10** | 54 | 3059 | 56 | 26 | 47 | 5.96 | 5 | **4** (ID 15) | 1 | **141 / 141** | `{'car': 134}` (max conf **0.873**) |
+
+**Findings:**
+- **Higher conf (0.25) + yolo11s (B)** gives the van full 141/141 coverage at high confidence (0.873), but creates more flicker/IDs (57, 144 gap events).
+- **Lower conf (0.10) + yolo11n (A)** reduces IDs to 45 and gap events to 36, mean duration 5.68 s, but the van only reaches 109/141 with max conf 0.341 and class votes truck/bus.
+- **Lower conf (0.10) + yolo11s (C)** is the middle ground: 54 IDs, 47 gap events, mean duration 5.96 s, 4 low-conf IDs (only ID 15 ≤5 frames), van at 141/141 with class car at conf 0.873.
+- **No ground truth exists** for this dense night scene; detection counts are the model's own.
+- **Not every parked bike gets a box** in some configs; the "parked bikes/scooters" row is an aggregate of several distinct tracks.
+- **Distant traffic still switches IDs** frequently — this is a fundamental ByteTrack limitation on crowded scenes.
+- **Decoding by frame-index seek costs ~350 ms per sampled frame**, about 8–10× the YOLO+tracker time (~37–46 ms). This dominates end-to-end throughput.
+- **`SAMPLE_RATE_FPS=10`** with `LOST_FRAMES=10` gives a loss window of ~1.0 s (10 sampled frames ≈ 1 s at 10 fps); at 5 fps the window was ~2 s.
+
+The new defaults are: **yolo11s, conf 0.10, imgsz 1280, 10 fps sampling, ByteTrack match_thresh 0.9**.
