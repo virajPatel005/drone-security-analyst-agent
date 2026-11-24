@@ -7,7 +7,7 @@ Status key: [ ] todo, [~] in progress, [x] done. Update this file at the end of 
 - [x] Step 2: Sample video, frame sampling, simulated telemetry and simulated clock, plus text-only simulation mode
 - [x] Step 3: YOLO + ByteTrack, convert tracks to events (appeared, entered zone, left, dwell time)
 - [x] Step 4: SQLite schema and indexing, queries by time and by object
-- [ ] Step 5: Rule-based alerts
+- [x] Step 5: Rule-based alerts
 - [ ] Step 6: VLM on new-track crops via LM Studio, structured output, stored in the database
 - [ ] Step 7: OpenAI agent: summary, recommendations, follow-up Q&A over stored data
 - [ ] Step 8: Tests (fakes for models), scenario tests for midnight alert and truck logged

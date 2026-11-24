@@ -26,6 +26,7 @@ from src.config.settings import (
     SIM_START_DATETIME,
     VIDEO_PATH,
 )
+from src.alerts import ALERT_RULES
 from src.storage import init_db, store_run, store_tracks_and_events
 from src.perception.annotated_video import AnnotatedVideoWriter, annotated_video_path
 from src.perception.events import EventBuilder, TrackEvent
@@ -165,6 +166,21 @@ def main() -> None:
 
     # ---- store tracks and events in one transaction -------------------------
     store_tracks_and_events(conn, run_id, events, tuning_settings=tuning_settings)
+
+    # ---- derive alerts from the stored rows ----------------------------------
+    # Alerts are computed after storage, never from live model output, so the
+    # same rules can be re-run later from the database alone. Re-running is
+    # safe: the alerts table has UNIQUE (run_id, track_id, rule_name) and
+    # store_alert uses INSERT OR IGNORE, so counts never inflate.
+    for rule_fn in ALERT_RULES.values():
+        rule_fn(conn, run_id=run_id)
+
+    alert_counts = dict(
+        conn.execute(
+            "SELECT rule_name, COUNT(*) FROM alerts WHERE run_id = ? GROUP BY rule_name",
+            (run_id,),
+        ).fetchall()
+    )
     conn.close()
 
     # -----------------------------------------------------------------------
@@ -187,6 +203,9 @@ def main() -> None:
     print(f"device: {tracker.device}")
     print(f"annotated_video: {output_path.resolve()}")
     print(f"db: {db_path.resolve()}")
+    print("alerts:")
+    for rule_name in ALERT_RULES:
+        print(f"  {rule_name}: {alert_counts.get(rule_name, 0)}")
 
 
 if __name__ == "__main__":

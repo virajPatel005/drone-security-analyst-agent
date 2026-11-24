@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     class_name      TEXT NOT NULL,
     first_seen      TEXT NOT NULL,          -- ISO 8601 datetime
     last_seen       TEXT NOT NULL,          -- ISO 8601 datetime
-    frames_seen     INTEGER NOT NULL,
+    frames_seen     INTEGER NOT NULL,       -- number of stored events for this track, NOT detected frames
     max_confidence  REAL NOT NULL DEFAULT 0.0,
     PRIMARY KEY (run_id, track_id)
 );
@@ -58,6 +58,25 @@ CREATE INDEX IF NOT EXISTS idx_events_track ON events(track_id);
 
 -- Composite index so that "events of a given type within a time window" is fast.
 CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(event_type, timestamp);
+
+-- Alerts table for rule-based detections
+CREATE TABLE IF NOT EXISTS alerts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          INTEGER NOT NULL,
+    track_id        INTEGER NOT NULL,
+    rule_name       TEXT    NOT NULL,
+    severity        TEXT    NOT NULL,   -- 'warning' or 'info'
+    timestamp       TEXT    NOT NULL,   -- ISO 8601 datetime
+    reason          TEXT    NOT NULL,   -- plain-English reason
+    zone            TEXT,               -- zone at time of alert
+    UNIQUE (run_id, track_id, rule_name)   -- one alert per track per rule
+);
+
+-- Index so that "all alerts for one run" is fast.
+CREATE INDEX IF NOT EXISTS idx_alerts_run ON alerts(run_id);
+
+-- Index so that "all alerts of a given rule" is fast.
+CREATE INDEX IF NOT EXISTS idx_alerts_rule ON alerts(rule_name);
 """
 
 _CREATE_RUN_SQL = """
@@ -236,7 +255,9 @@ def store_tracks_and_events(
                 track_events[0].class_name,  # class name from the first event
                 _iso(first_seen),
                 _iso(last_seen),
-                len(track_events),  # approximate frames_seen
+                # Misnamed historical field: this is the number of stored
+                # events for the track, not the number of detected frames.
+                len(track_events),
                 max_confs.get(tid, 0.0),
             ),
         )
@@ -497,3 +518,114 @@ def query_counts_by_event_type(
     sql = _GET_COUNTS_BY_TYPE_SQL.format(run_where=run_where)
     cursor = conn.execute(sql, params)
     return {row[0]: row[1] for row in cursor.fetchall()}
+
+
+# ---------------------------------------------------------------------------
+# Alert storage writes — each function commits its own transaction
+# ---------------------------------------------------------------------------
+
+
+def store_alert(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    track_id: int,
+    rule_name: str,
+    severity: str,
+    timestamp: str,
+    reason: str,
+    zone: str | None = None,
+) -> int:
+    """Store one alert row and return its auto-generated ``id``.
+
+    The ``UNIQUE (run_id, track_id, rule_name)`` constraint ensures at most
+    one alert per track per rule; duplicate inserts are silently ignored.
+    Each caller is responsible for wrapping the call in its own transaction
+    (``with conn:`` or explicit ``commit``) if they want atomic grouping.
+    """
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO alerts (run_id, track_id, rule_name, severity, timestamp, reason, zone)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            track_id,
+            rule_name,
+            severity,
+            timestamp,
+            reason,
+            zone if zone else "",
+        ),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def query_alerts(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int | None = None,
+    rule_name: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Return alerts filtered by run, rule, and/or time window.
+
+    The ``start``/``end`` window may cross midnight — the timestamp strings
+    are stored as full ISO 8601 date‑times, so ordinary range comparisons work
+    for windows like 23:59:55 → 00:00:09 without special handling.
+
+    Parameters
+    ----------
+    run_id : int | None
+    rule_name : str | None
+    start : datetime | None
+        Inclusive lower bound (ISO 8601 string or ``datetime``).
+    end : datetime | None
+        Inclusive upper bound (ISO 8601 string or ``datetime``).
+
+    Returns
+    -------
+    list[dict]
+        Each dict has the same keys as the alerts table columns.
+    """
+    wheres: list[str] = []
+    params: list[Any] = []
+
+    if run_id is not None:
+        wheres.append("run_id = ?")
+        params.append(run_id)
+
+    if rule_name is not None:
+        wheres.append("rule_name = ?")
+        params.append(rule_name)
+
+    if start is not None and end is not None:
+        wheres.append("timestamp >= ? AND timestamp <= ?")
+        params.extend([_iso(start), _iso(end)])
+
+    where_clause = " AND ".join(wheres) if wheres else "1=1"
+
+    sql = f"""
+        SELECT id, run_id, track_id, rule_name, severity, timestamp, reason, zone
+        FROM alerts
+        WHERE {where_clause}
+        ORDER BY timestamp ASC;
+    """
+
+    cursor = conn.execute(sql, params)
+    rows = cursor.fetchall()
+    return [
+        {
+            "id": r[0],
+            "run_id": r[1],
+            "track_id": r[2],
+            "rule_name": r[3],
+            "severity": r[4],
+            "timestamp": r[5],
+            "reason": r[6],
+            "zone": r[7] if r[7] else None,
+        }
+        for r in rows
+    ]

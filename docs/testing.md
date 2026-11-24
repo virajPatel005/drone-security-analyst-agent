@@ -194,3 +194,81 @@ All 261 events are returned, because the entire demo video (simulated start `202
 Note: the midnight-crossing window query works without special handling because timestamps are stored as full ISO 8601 date‑times (`2026-11-23T23:59:55`), enabling ordinary range comparisons.
 
 The new defaults are: **yolo11s, conf 0.10, imgsz 1280, 10 fps sampling, ByteTrack match_thresh 0.9**.
+
+## Step 5: Rule-based Alerts Measurements
+
+Two real video clips were run through the full pipeline with the default configuration (yolo11s, conf 0.10, imgsz 1280, 10 fps sampling) and both runs were appended to the same `data/demo.db`. `scripts/run_tracking.py` now generates the alerts itself after storing tracks and events, so the numbers below come from the pipeline with no manual rule calls.
+
+### drone_intersection.mp4
+- Simulated start: 2026-11-23T23:59:55 (the clip crosses midnight, so tracks split across the night window)
+- Resolution: 1080x1920, fps 30.0, duration 16.633 s
+- Sampled frames: 167
+- Unique tracks: 33 (all car class)
+- Person tracks: 0
+- Truck/bus tracks: 0
+- appeared events: 44
+- Alert results:
+  - vehicle_at_night: 12 (car tracks first-seen in 00:00-05:00 window)
+  - person_at_night: 0
+  - loitering: 10 (tracks with last_seen - first_seen > 5 s)
+  - heavy_vehicle_logged: 0
+- TODO: source and licence to be added if provided
+
+### drone_truck.mp4
+- Simulated start: 2026-11-24T14:00:00 (daytime, so the night rules do not apply)
+- Resolution: 1920x1080, fps 24.0, duration 18.333 s
+- Sampled frames: 184
+- Unique tracks: 23 (17 car + 6 truck)
+- Person tracks: 0
+- Truck/bus tracks: 6
+- appeared events: 25
+- Alert results:
+  - vehicle_at_night: 0 (run starts at 14:00; the earlier "16" figure came from a different simulated start and is not reproducible from this stored run)
+  - person_at_night: 0
+  - loitering: 5 (tracks with last_seen - first_seen > 5 s)
+  - heavy_vehicle_logged: 6 (truck tracks, severity info)
+- The six heavy-vehicle alerts correspond to track IDs 2, 103, 326, 330, 360 and 410. Each has an `appeared` event, so each is confirmed. The `tracks` table has no `confirmed` column; confirmation is implied by having an `appeared` event.
+- Caveat: `tracks.frames_seen` is currently `len(track events)` (appeared + zone changes + left), not a frame count. The name is misleading and it should not be used as a detection count.
+- TODO: source and licence to be added if provided
+
+### Rule test with fake data (no models)
+Each rule was tested with injected track data:
+- `vehicle_at_night`: fires for tracks with first-seen hour in [00:00, 05:00), does not fire for 23:59:58
+- `person_at_night`: does not fire when no person tracks exist
+- `loitering`: fires when last_seen - first_seen > 5 s, does not fire for shorter tracks
+- `heavy_vehicle_logged`: fires for truck/bus tracks regardless of hour, severity info
+- Once-per-track dedup verified via UNIQUE (run_id, track_id, rule_name) constraint
+- Unconfirmed tracks (not in tracks table) ignored by all rules
+
+### Midnight boundary verification
+- Track at 23:59:58: hour 23 not in night window → no alert
+- Track at 00:00:03: hour 0 in night window → alert fires
+
+### YOLO-only diagnostic on drone_truck.mp4 (no tracker)
+Temporary script (`/tmp/opencode/truck_probe.py`, not committed), yolo11s, conf 0.10, 10 fps sampling, no ByteTrack. Annotated start/middle/end frames were written to `/tmp/opencode/truck_probe/`.
+
+| imgsz | sampled frames | mean vehicle dets/frame | frames with >=1 truck/bus | car | truck | bus | train | person | ms/frame |
+|---|---|---|---|---|---|---|---|---|---|
+| 1280 | 184 | 17.011 | 184 (100%) | 2106 | 988 | 36 | 244 | 51 | 27.35 |
+| 1920 | 184 | 26.734 | 184 (100%) | 3263 | 1633 | 23 | 338 | 43 | 33.51 |
+
+Interpretation:
+- Detection counts rose ~57% at 1920 for ~23% more time per frame, so 1920 does not look like a cheap win on this GPU.
+- 100% of frames contain a truck/bus label, but the annotated frames show several high-confidence false positives on static structures (a building labelled `truck 0.22`, the road labelled `train`). Detection presence alone is not evidence that a real truck is present, which is why `heavy_vehicle_logged` must keep severity `info` and why per-track confirmation matters.
+- The probe sees ~11 cars per frame but the stored tracker run produces only 23 tracks. That gap is unexplained; a tracker-level count (with IDs) is needed before drawing conclusions about fragmentation.
+
+### Known limits of the alert layer
+- **Alerts count tracks, not physical objects.** One truck split across several ByteTrack IDs becomes several `heavy_vehicle_logged` alerts, and two objects sharing an ID become one. The counts are "confirmed tracks that matched a rule".
+- **Small objects from altitude are often missed.** The raw YOLO probe found roughly 11 car detections per frame, while the tracker stored only 23 tracks for the whole clip. Distant vehicles are a few pixels wide and disappear between sampled frames.
+- **`person_at_night` is tested on fake data only.** Neither demo clip produced a confirmed person track, so the rule's behaviour on real footage is unverified.
+- **Tiled inference is untried future work.** Running YOLO on overlapping tiles (SAHI-style) is the obvious way to recover small objects, but it has not been implemented or measured.
+
+### Test count reconciliation
+- Step 4 commit (8b2f7c7) collects **31** tests, not 30 (verified in a clean worktree at that commit).
+- Current tree collects **40** tests: net **+9**.
+- `tests/test_storage.py` went from 7 to 16 tests.
+- Tests in `test_storage.py` that changed relative to Step 4:
+  - **9 alert tests added**, including one that runs `ALERT_RULES` twice and proves the stored alert count does not grow.
+  - `test_night_window_22_00_to_05_00_both_sides_midnight` was replaced by `test_night_window_wraps_midnight_22_to_05`, which patches the window to 22‑5 and checks real tracks at 23:30/04:00 (fire) and 12:00/21:59/05:00 (no fire). The old test only asserted the constants.
+  - `test_store_and_reopen_file_db` and `test_per_track_query_with_id_switching_note` were restored; the file-DB test now writes runs, tracks, events and an alert with `tmp_path` and reopens the connection.
+- The earlier "13 new alert tests" claim was wrong: 13 was the then-total for `test_storage.py`, not the number added.
