@@ -53,6 +53,9 @@ venv.bak/
 *.sqlite
 *.sqlite3
 
+# VLM crop files (small aerial crops, not to be committed)
+data/crops/
+
 # Assignment PDF
 *.pdf
 

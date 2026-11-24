@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.alerts import ALERT_RULES
 from src.config.settings import (
     ANNOTATED_MAX_WIDTH,
     ANNOTATED_OUTPUT_DIR,
@@ -25,8 +26,19 @@ from src.config.settings import (
     SAMPLE_RATE_FPS,
     SIM_START_DATETIME,
     VIDEO_PATH,
+    VLM_CROP_MIN_PAD_PX,
+    VLM_CROP_MIN_SHORT_SIDE_PX,
+    VLM_CROP_PAD_RATIO,
+    VLM_CROP_TARGET_SHORT_SIDE_PX,
+    VLM_CROPS_DIR,
+    VLM_ENABLED,
 )
-from src.alerts import ALERT_RULES
+from src.description import (
+    CropRecord,
+    LmStudioVlmClient,
+    describe_run,
+    save_track_crop,
+)
 from src.storage import init_db, store_run, store_tracks_and_events
 from src.perception.annotated_video import AnnotatedVideoWriter, annotated_video_path
 from src.perception.events import EventBuilder, TrackEvent
@@ -121,6 +133,14 @@ def main() -> None:
     tracking_seconds = 0.0
     sampled_frames = 0
 
+    # Crops are written during tracking (cheap OpenCV work) and described
+    # afterwards, so VLM latency never blocks the frame loop.
+    crops_dir = VLM_CROPS_DIR / f"run_{run_id:03d}"
+    crop_records: list[CropRecord] = []
+    cropped_tracks: set[int] = set()
+    if VLM_ENABLED:
+        crops_dir.mkdir(parents=True, exist_ok=True)
+
     with AnnotatedVideoWriter(
         output_path,
         fps=SAMPLE_RATE_FPS,
@@ -142,7 +162,42 @@ def main() -> None:
             tracking_seconds += time.perf_counter() - started
             sampled_frames += 1
 
-            events.extend(builder.process_frame(record, observations))
+            new_events = builder.process_frame(record, observations)
+            events.extend(new_events)
+
+            if VLM_ENABLED:
+                for event in new_events:
+                    # appeared is emitted on the frame where the track becomes
+                    # confirmed, so this is the requested crop frame. Only the
+                    # first appearance of a track ID is described; a reused ID
+                    # later in the clip must not create a second row.
+                    if event.event_type != "appeared":
+                        continue
+                    if event.track_id in cropped_tracks:
+                        continue
+                    cropped_tracks.add(event.track_id)
+
+                    crop_path = crops_dir / f"track_{event.track_id:06d}.jpg"
+                    too_small, orig_w, orig_h = save_track_crop(
+                        record.image,
+                        event.bbox,
+                        crop_path,
+                        pad_ratio=VLM_CROP_PAD_RATIO,
+                        min_pad_px=VLM_CROP_MIN_PAD_PX,
+                        min_short_side_px=VLM_CROP_MIN_SHORT_SIDE_PX,
+                        target_short_side_px=VLM_CROP_TARGET_SHORT_SIDE_PX,
+                    )
+                    crop_records.append(
+                        CropRecord(
+                            track_id=event.track_id,
+                            class_name=event.class_name,
+                            crop_path=None if too_small else crop_path,
+                            orig_width=orig_w,
+                            orig_height=orig_h,
+                            too_small=too_small,
+                        )
+                    )
+
             writer.write(record.image, observations, record.timestamp, record.location)
 
             for observation in observations:
@@ -166,6 +221,16 @@ def main() -> None:
 
     # ---- store tracks and events in one transaction -------------------------
     store_tracks_and_events(conn, run_id, events, tuning_settings=tuning_settings)
+
+    # ---- describe confirmed tracks from the saved crops ---------------------
+    description_summary = None
+    if VLM_ENABLED:
+        description_summary = describe_run(
+            conn,
+            run_id=run_id,
+            crops=crop_records,
+            client=LmStudioVlmClient(),
+        )
 
     # ---- derive alerts from the stored rows ----------------------------------
     # Alerts are computed after storage, never from live model output, so the
@@ -203,6 +268,14 @@ def main() -> None:
     print(f"device: {tracker.device}")
     print(f"annotated_video: {output_path.resolve()}")
     print(f"db: {db_path.resolve()}")
+    if description_summary is None:
+        print("vlm: disabled")
+    else:
+        print("vlm:")
+        print(f"  described: {description_summary.described}")
+        print(f"  too_small: {description_summary.too_small}")
+        print(f"  error: {description_summary.error}")
+        print(f"  total_seconds: {description_summary.total_latency_s:.2f}")
     print("alerts:")
     for rule_name in ALERT_RULES:
         print(f"  {rule_name}: {alert_counts.get(rule_name, 0)}")

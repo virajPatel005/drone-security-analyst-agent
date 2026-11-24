@@ -23,10 +23,12 @@ from src.storage import (
     init_db,
     query_alerts,
     query_counts_by_event_type,
+    query_descriptions,
     query_events_for_track,
     query_events_in_time_window,
     query_tracks_by_class,
     store_alert,
+    store_description,
     store_run,
     store_tracks_and_events,
 )
@@ -435,6 +437,19 @@ def test_store_and_reopen_file_db(tmp_path):
         timestamp="2026-01-01T00:00:05",
         reason="track 1 loitered for 5.0s",
     )
+    store_description(
+        conn,
+        run_id=run_id,
+        track_id=1,
+        status="described",
+        description="A white car seen from above.",
+        attributes={"object_type": "car", "main_colour": "white"},
+        crop_path="/tmp/crop.jpg",
+        orig_width=40,
+        orig_height=30,
+        model_name="fake-vlm",
+        latency_ms=100.0,
+    )
     conn.close()
 
     reopened = init_db(db_file)
@@ -443,11 +458,17 @@ def test_store_and_reopen_file_db(tmp_path):
         assert reopened.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 1
         assert reopened.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 3
         assert reopened.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 1
+        assert reopened.execute("SELECT COUNT(*) FROM descriptions").fetchone()[0] == 1
 
         alerts = query_alerts(reopened, run_id=run_id, rule_name="loitering")
         assert len(alerts) == 1
         assert alerts[0]["track_id"] == 1
         assert alerts[0]["reason"] == "track 1 loitered for 5.0s"
+
+        descriptions = query_descriptions(reopened, run_id=run_id, track_id=1)
+        assert len(descriptions) == 1
+        assert descriptions[0]["description"] == "A white car seen from above."
+        assert descriptions[0]["attributes"]["main_colour"] == "white"
     finally:
         reopened.close()
 

@@ -63,3 +63,40 @@ TEST_IMAGE_NAME = os.getenv("TEST_IMAGE_NAME", "multiple_cars.jpg")
 TEST_IMAGE_PATH = TEST_IMAGES_DIR / TEST_IMAGE_NAME
 
 DB_PATH = PROJECT_ROOT / "data" / "demo.db"
+
+# --- Step 6: VLM description of confirmed tracks ---------------------------
+# Tracking-only runs are possible by setting VLM_ENABLED=0; no crops are
+# written and no LM Studio calls are made in that mode.
+VLM_ENABLED = os.getenv("VLM_ENABLED", "1") == "1"
+VLM_CROPS_DIR = PROJECT_ROOT / "data" / "crops"
+# Pad each box by this fraction of its width/height on every side, but never
+# less than the pixel floor (keeps very small boxes from being pure object).
+VLM_CROP_PAD_RATIO = float(os.getenv("VLM_CROP_PAD_RATIO", "0.5"))
+VLM_CROP_MIN_PAD_PX = int(os.getenv("VLM_CROP_MIN_PAD_PX", "4"))
+# Boxes whose shorter side is below this many source pixels are not described.
+VLM_CROP_MIN_SHORT_SIDE_PX = int(os.getenv("VLM_CROP_MIN_SHORT_SIDE_PX", "20"))
+# Upscale the padded crop so its shorter side reaches this many pixels.
+VLM_CROP_TARGET_SHORT_SIDE_PX = int(os.getenv("VLM_CROP_TARGET_SHORT_SIDE_PX", "336"))
+# Keep LM_STUDIO_IMAGE_MAX_TOKENS >= 512: 128 was consumed by reasoning and
+# produced an empty reply (see docs/design-decisions.md).
+VLM_PROMPT = (
+    "You are given a small, low-resolution crop of an object from an aerial "
+    "drone video. It may be blurry or only a few pixels wide. Do not guess "
+    "details you cannot actually see; if unsure, say so in the description. "
+    "Reply with JSON only: {\"object_type\": string, \"main_colour\": string, "
+    "\"description\": one short sentence}."
+)
+VLM_JSON_SCHEMA = {
+    "name": "track_description",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "object_type": {"type": "string"},
+            "main_colour": {"type": "string"},
+            "description": {"type": "string"},
+        },
+        "required": ["object_type", "main_colour", "description"],
+        "additionalProperties": False,
+    },
+}

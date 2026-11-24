@@ -77,6 +77,27 @@ CREATE INDEX IF NOT EXISTS idx_alerts_run ON alerts(run_id);
 
 -- Index so that "all alerts of a given rule" is fast.
 CREATE INDEX IF NOT EXISTS idx_alerts_rule ON alerts(rule_name);
+
+-- VLM descriptions of confirmed tracks. One row per track per run, ever:
+-- the UNIQUE constraint is what makes the "describe once" rule enforceable.
+CREATE TABLE IF NOT EXISTS descriptions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          INTEGER NOT NULL,
+    track_id        INTEGER NOT NULL,
+    status          TEXT    NOT NULL,   -- 'described' | 'too_small' | 'error'
+    description     TEXT,               -- sentence, or raw text when status='error'
+    attributes      TEXT,               -- JSON: object_type, main_colour, ...
+    crop_path       TEXT,               -- saved crop file; NULL when too_small
+    orig_width      INTEGER NOT NULL,   -- original box width in source pixels
+    orig_height     INTEGER NOT NULL,   -- original box height in source pixels
+    model_name      TEXT NOT NULL,
+    latency_ms      REAL,
+    created_time    TEXT NOT NULL,
+    UNIQUE (run_id, track_id)
+);
+
+-- Index so that "all descriptions for one run" is fast.
+CREATE INDEX IF NOT EXISTS idx_descriptions_run ON descriptions(run_id);
 """
 
 _CREATE_RUN_SQL = """
@@ -626,6 +647,109 @@ def query_alerts(
             "timestamp": r[5],
             "reason": r[6],
             "zone": r[7] if r[7] else None,
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Description storage — each function commits its own transaction
+# ---------------------------------------------------------------------------
+
+
+def store_description(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    track_id: int,
+    status: str,
+    description: str | None,
+    attributes: dict[str, Any] | None,
+    crop_path: str | None,
+    orig_width: int,
+    orig_height: int,
+    model_name: str,
+    latency_ms: float | None,
+) -> int:
+    """Store one track description and return its row id.
+
+    ``status`` is ``described``, ``too_small`` or ``error``. For ``error`` the
+    raw model text (or exception text) is kept in ``description`` so a failure
+    is never silently dropped. ``attributes`` is serialised as JSON.
+
+    The ``UNIQUE (run_id, track_id)`` constraint plus ``INSERT OR IGNORE``
+    means a track can never be described twice, even if the stage is retried.
+    The commit is inside this function because each row is independently
+    useful if a later call fails.
+    """
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO descriptions (
+            run_id, track_id, status, description, attributes, crop_path,
+            orig_width, orig_height, model_name, latency_ms, created_time
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            track_id,
+            status,
+            description,
+            json.dumps(attributes, sort_keys=True) if attributes is not None else None,
+            crop_path,
+            orig_width,
+            orig_height,
+            model_name,
+            latency_ms,
+            _iso(datetime.now(timezone.utc)),
+        ),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def query_descriptions(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int | None = None,
+    track_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return descriptions filtered by run and/or track, ordered by track."""
+    wheres: list[str] = []
+    params: list[Any] = []
+
+    if run_id is not None:
+        wheres.append("run_id = ?")
+        params.append(run_id)
+    if track_id is not None:
+        wheres.append("track_id = ?")
+        params.append(track_id)
+
+    where_clause = " AND ".join(wheres) if wheres else "1=1"
+    cursor = conn.execute(
+        f"""
+        SELECT id, run_id, track_id, status, description, attributes, crop_path,
+               orig_width, orig_height, model_name, latency_ms, created_time
+        FROM descriptions
+        WHERE {where_clause}
+        ORDER BY track_id ASC;
+        """,
+        params,
+    )
+    rows = cursor.fetchall()
+    return [
+        {
+            "id": r[0],
+            "run_id": r[1],
+            "track_id": r[2],
+            "status": r[3],
+            "description": r[4],
+            "attributes": json.loads(r[5]) if r[5] else None,
+            "crop_path": r[6],
+            "orig_width": r[7],
+            "orig_height": r[8],
+            "model_name": r[9],
+            "latency_ms": r[10],
+            "created_time": r[11],
         }
         for r in rows
     ]

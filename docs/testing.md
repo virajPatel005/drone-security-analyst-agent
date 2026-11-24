@@ -272,3 +272,28 @@ Interpretation:
   - `test_night_window_22_00_to_05_00_both_sides_midnight` was replaced by `test_night_window_wraps_midnight_22_to_05`, which patches the window to 22‑5 and checks real tracks at 23:30/04:00 (fire) and 12:00/21:59/05:00 (no fire). The old test only asserted the constants.
   - `test_store_and_reopen_file_db` and `test_per_track_query_with_id_switching_note` were restored; the file-DB test now writes runs, tracks, events and an alert with `tmp_path` and reopens the connection.
 - The earlier "13 new alert tests" claim was wrong: 13 was the then-total for `test_storage.py`, not the number added.
+
+### VLM description measurements (real runs)
+Two clips were processed with the full pipeline (yolo11s, conf 0.10, 10 fps sampling). VLM calls used `google/gemma-4-e4b` against the LM Studio server at `http://172.19.144.1:1234/v1`. Each confirmed track produced exactly one crop (the `appeared` frame) and one VLM call; too-small crops were skipped. Results:
+
+| Run | Start | Track count | Described | Too small | Error | Total VLM seconds |
+|-----|-------|------------|-----------|-----------|-------|-------------------|
+| 1   | 23:59:55 | 33 | 33 | 0 | 0 | 42.37 |
+| 2   | 14:00:00 | 23 | 11 | 12 | 0 | 14.59 |
+
+### Run 2 truck-class tracks and `heavy_vehicle_logged` false-positive analysis
+The six truck-class tracks in run 2 (ids 2, 103, 326, 330, 360, 410) each received a `heavy_vehicle_logged` alert (severity `info`). The VLM descriptions of their crops are:
+
+| track | VLM description | Looks like a truck? |
+|-------|----------------|----------------------|
+| 2 | A rectangular white object is visible, but its full nature and details are unclear. | uncertain |
+| 103 | A blurry rectangular object that appears to be a storage container. | no |
+| 326 | There are three small, rectangular blocks of blue and red colors. | no |
+| 330 | A small red vehicle is visible on a dusty surface. | unclear (a small vehicle, not described as a truck) |
+| 360 | A large, rectangular white object is visible on the ground. | no |
+| 410 | A blurry view of a brick building facade with visible windows and architectural details. | no |
+
+The VLM descriptions show that 4 of the 6 truck-class tracks are described as non‑trucks, 1 (track 330) is unclear — a small vehicle not described as a truck — and 1 (track 2) is uncertain.  Together this means only track 330 could reasonably be considered a genuine truck; the other five `heavy_vehicle_logged` alerts fire on tracks whose crops do not depict trucks, so the alerts are effectively false positives from the rule's class‑only perspective.
+
+### Test count reconciliation
+- The earlier "13 new alert tests" claim was wrong: 13 was the then-total for `test_storage.py`, not the number added.
