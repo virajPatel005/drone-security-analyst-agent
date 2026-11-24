@@ -39,7 +39,8 @@ from src.description import (
     describe_run,
     save_track_crop,
 )
-from src.storage import init_db, store_run, store_tracks_and_events
+from src.indexing import FrameObjectRow, FrameRow, build_frame_index
+from src.storage import init_db, store_frame_index, store_run, store_tracks_and_events
 from src.perception.annotated_video import AnnotatedVideoWriter, annotated_video_path
 from src.perception.events import EventBuilder, TrackEvent
 from src.perception.frame_sampler import probe_video
@@ -130,6 +131,10 @@ def main() -> None:
 
     events: list[TrackEvent] = []
     summaries: dict[int, _TrackSummary] = {}
+    # The frame index is collected here, inside the tracking loop, so every
+    # future run is indexed by time and object without a separate backfill.
+    frame_rows: list[FrameRow] = []
+    frame_object_rows: list[FrameObjectRow] = []
     tracking_seconds = 0.0
     sampled_frames = 0
 
@@ -161,6 +166,10 @@ def main() -> None:
             observations = tracker.track(record.image)
             tracking_seconds += time.perf_counter() - started
             sampled_frames += 1
+
+            frame, frame_objects = build_frame_index(record, observations)
+            frame_rows.append(frame)
+            frame_object_rows.extend(frame_objects)
 
             new_events = builder.process_frame(record, observations)
             events.extend(new_events)
@@ -222,6 +231,11 @@ def main() -> None:
     # ---- store tracks and events in one transaction -------------------------
     store_tracks_and_events(conn, run_id, events, tuning_settings=tuning_settings)
 
+    # ---- store the frame index for this run ---------------------------------
+    # A single replace-write makes re-indexing idempotent; only the two new
+    # frame tables are affected, so descriptions/costs/traces stay untouched.
+    store_frame_index(conn, run_id, frame_rows, frame_object_rows)
+
     # ---- describe confirmed tracks from the saved crops ---------------------
     description_summary = None
     if VLM_ENABLED:
@@ -259,6 +273,10 @@ def main() -> None:
     _print_track_summary(summaries, dwell_by_track)
     print()
     print(f"sampled_frames: {sampled_frames}")
+    print(
+        "frame_index: "
+        f"frames={len(frame_rows)} detections={len(frame_object_rows)}"
+    )
     print(f"total_seconds: {metadata.duration_s:.3f}")
     print(f"effective_fps: {sampled_frames / metadata.duration_s:.3f}")
     print(

@@ -59,6 +59,37 @@ CREATE INDEX IF NOT EXISTS idx_events_track ON events(track_id);
 -- Composite index so that "events of a given type within a time window" is fast.
 CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(event_type, timestamp);
 
+-- Frame index. One row per sampled frame. ``description`` stays NULL for video
+-- frames and is filled by the text-only simulation, so both modes share one
+-- schema and downstream queries never branch on the source.
+CREATE TABLE IF NOT EXISTS frames (
+    run_id          INTEGER NOT NULL,
+    frame_index     INTEGER NOT NULL,   -- 1-based index in the sampled stream
+    timestamp       TEXT NOT NULL,      -- full ISO 8601 simulated date-time
+    zone            TEXT,               -- simulated telemetry location
+    detection_count INTEGER NOT NULL,   -- number of detections stored for this frame
+    description     TEXT,               -- NULL for video frames; text frames fill this
+    PRIMARY KEY (run_id, frame_index)
+);
+
+-- One row per detection in a sampled frame. ``track_id`` is nullable because a
+-- detection need not have a tracker ID (e.g. text-mode "objects"). A separate
+-- row per detection is what makes "show all truck frames" and per-track frame
+-- lists possible without re-reading the video or re-running the VLM.
+CREATE TABLE IF NOT EXISTS frame_objects (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      INTEGER NOT NULL,
+    frame_index INTEGER NOT NULL,
+    track_id    INTEGER,                -- nullable by design
+    class_name  TEXT NOT NULL,
+    confidence  REAL NOT NULL,
+    bbox        TEXT NOT NULL           -- JSON [x1, y1, x2, y2] in source pixels
+);
+
+CREATE INDEX IF NOT EXISTS idx_frames_run_timestamp ON frames(run_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_frame_objects_run_class ON frame_objects(run_id, class_name);
+CREATE INDEX IF NOT EXISTS idx_frame_objects_run_track ON frame_objects(run_id, track_id);
+
 -- Alerts table for rule-based detections
 CREATE TABLE IF NOT EXISTS alerts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -354,6 +385,77 @@ def store_tracks_and_events(
 
 
 # ---------------------------------------------------------------------------
+# Frame-index writes — each function commits inside itself
+# -------------------------------------------------------------------------__
+
+
+def _field(row: Any, name: str) -> Any:
+    """Read a field from a dataclass-like row or a dict, so callers may use either."""
+    if isinstance(row, dict):
+        return row[name]
+    return getattr(row, name)
+
+
+FRAME_QUERY_DEFAULT_LIMIT = 50
+
+
+def store_frame_index(
+    conn: sqlite3.Connection,
+    run_id: int,
+    frames: list[Any],
+    objects: list[Any],
+) -> int:
+    """Replace this run's frame index with *frames* and *objects*, then commit.
+
+    Idempotency is the reason for the two DELETEs: a retry or a backfill of an
+    already-indexed run must leave exactly one row per frame/detection, never
+    duplicates. Only the two new frame tables are touched — runs, tracks,
+    events, alerts, descriptions and the agent tables are deliberately never
+    modified here, because a backfill must not disturb stored cost/summary data.
+
+    One commit per call (not per row) keeps a multi-thousand-row re-index fast
+    while still making each write function self-committing like store_alert.
+    """
+    conn.execute("DELETE FROM frame_objects WHERE run_id = ?", (run_id,))
+    conn.execute("DELETE FROM frames WHERE run_id = ?", (run_id,))
+
+    conn.executemany(
+        "INSERT INTO frames (run_id, frame_index, timestamp, zone, detection_count, description) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (
+                run_id,
+                int(_field(f, "frame_index")),
+                _iso(_field(f, "timestamp")),
+                _field(f, "zone"),
+                int(_field(f, "detection_count")),
+                _field(f, "description"),
+            )
+            for f in frames
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO frame_objects (run_id, frame_index, track_id, class_name, confidence, bbox) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (
+                run_id,
+                int(_field(o, "frame_index")),
+                _field(o, "track_id"),
+                _field(o, "class_name"),
+                float(_field(o, "confidence")),
+                _field(o, "bbox")
+                if isinstance(_field(o, "bbox"), str)
+                else json.dumps(list(_field(o, "bbox"))),
+            )
+            for o in objects
+        ],
+    )
+    conn.commit()
+    return len(frames)
+
+
+# ---------------------------------------------------------------------------
 # Read path — queries returning plain typed objects
 # -------------------------------------------------------------------------__
 
@@ -590,6 +692,161 @@ def query_counts_by_event_type(
     sql = _GET_COUNTS_BY_TYPE_SQL.format(run_where=run_where)
     cursor = conn.execute(sql, params)
     return {row[0]: row[1] for row in cursor.fetchall()}
+
+
+# ---------------------------------------------------------------------------
+# Frame-index queries — read-only, row-limited, total + truncation flag
+# ---------------------------------------------------------------------------
+
+
+def _limited_result(rows: list[dict[str, Any]], total: int, limit: int) -> dict[str, Any]:
+    """Wrap already-limited rows with an exact total and an explicit flag.
+
+    Mirrors agent.compact_rows: callers can never mistake a truncated page for
+    the whole result set.
+    """
+    result: dict[str, Any] = {
+        "total": total,
+        "showing": len(rows),
+        "truncated": total > len(rows),
+        "rows": rows,
+    }
+    if result["truncated"]:
+        result["notice"] = f"showing {len(rows)} of {total}"
+    return result
+
+
+def _check_limit(limit: int) -> int:
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    return limit
+
+
+def _frame_dict(r: Any) -> dict[str, Any]:
+    return {
+        "run_id": r[0],
+        "frame_index": r[1],
+        "timestamp": r[2],
+        "zone": r[3],
+        "detection_count": r[4],
+        "description": r[5],
+    }
+
+
+def _frame_object_dict(r: Any) -> dict[str, Any]:
+    return {
+        "run_id": r[0],
+        "frame_index": r[1],
+        "track_id": r[2],
+        "class_name": r[3],
+        "confidence": r[4],
+        "bbox": json.loads(r[5]),
+    }
+
+
+_FRAME_COLS = "run_id, frame_index, timestamp, zone, detection_count, description"
+_OBJECT_COLS = "run_id, frame_index, track_id, class_name, confidence, bbox"
+
+
+def query_frames_in_time_window(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    start: datetime | str,
+    end: datetime | str,
+    limit: int = FRAME_QUERY_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Return frames whose simulated timestamp is in [start, end].
+
+    Timestamps are full ISO 8601 strings, so a window crossing midnight is an
+    ordinary range comparison with no special handling.
+    """
+    limit = _check_limit(limit)
+    params = (run_id, _iso(start), _iso(end))
+    total = conn.execute(
+        "SELECT COUNT(*) FROM frames WHERE run_id = ? AND timestamp >= ? AND timestamp <= ?",
+        params,
+    ).fetchone()[0]
+    rows = conn.execute(
+        f"SELECT {_FRAME_COLS} FROM frames "
+        "WHERE run_id = ? AND timestamp >= ? AND timestamp <= ? "
+        "ORDER BY timestamp ASC, frame_index ASC LIMIT ?",
+        (*params, limit),
+    ).fetchall()
+    return _limited_result([_frame_dict(r) for r in rows], total, limit)
+
+
+def query_frames_by_class(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    class_name: str,
+    limit: int = FRAME_QUERY_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Return frames that contain at least one detection of *class_name*."""
+    limit = _check_limit(limit)
+    params = (run_id, class_name)
+    total = conn.execute(
+        "SELECT COUNT(DISTINCT f.frame_index) FROM frames f "
+        "JOIN frame_objects o ON o.run_id = f.run_id AND o.frame_index = f.frame_index "
+        "WHERE f.run_id = ? AND o.class_name = ?",
+        params,
+    ).fetchone()[0]
+    rows = conn.execute(
+        f"SELECT DISTINCT f.{', f.'.join(_FRAME_COLS.split(', '))} FROM frames f "
+        "JOIN frame_objects o ON o.run_id = f.run_id AND o.frame_index = f.frame_index "
+        "WHERE f.run_id = ? AND o.class_name = ? "
+        "ORDER BY f.frame_index ASC LIMIT ?",
+        (*params, limit),
+    ).fetchall()
+    return _limited_result([_frame_dict(r) for r in rows], total, limit)
+
+
+def query_objects_by_class(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    class_name: str,
+    limit: int = FRAME_QUERY_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Return individual detections of *class_name*, with their frame and track IDs."""
+    limit = _check_limit(limit)
+    params = (run_id, class_name)
+    total = conn.execute(
+        "SELECT COUNT(*) FROM frame_objects WHERE run_id = ? AND class_name = ?", params
+    ).fetchone()[0]
+    rows = conn.execute(
+        f"SELECT {_OBJECT_COLS} FROM frame_objects "
+        "WHERE run_id = ? AND class_name = ? "
+        "ORDER BY frame_index ASC, id ASC LIMIT ?",
+        (*params, limit),
+    ).fetchall()
+    return _limited_result([_frame_object_dict(r) for r in rows], total, limit)
+
+
+def query_frames_for_track(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    track_id: int,
+    limit: int = FRAME_QUERY_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Return every frame in which *track_id* was detected."""
+    limit = _check_limit(limit)
+    params = (run_id, track_id)
+    total = conn.execute(
+        "SELECT COUNT(DISTINCT frame_index) FROM frame_objects "
+        "WHERE run_id = ? AND track_id = ?",
+        params,
+    ).fetchone()[0]
+    rows = conn.execute(
+        f"SELECT DISTINCT f.{', f.'.join(_FRAME_COLS.split(', '))} FROM frames f "
+        "JOIN frame_objects o ON o.run_id = f.run_id AND o.frame_index = f.frame_index "
+        "WHERE f.run_id = ? AND o.track_id = ? "
+        "ORDER BY f.frame_index ASC LIMIT ?",
+        (*params, limit),
+    ).fetchall()
+    return _limited_result([_frame_dict(r) for r in rows], total, limit)
 
 
 # ---------------------------------------------------------------------------

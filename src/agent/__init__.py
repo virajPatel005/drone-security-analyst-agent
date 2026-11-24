@@ -42,10 +42,15 @@ from src.storage import (
     init_db,
     query_agent_cost_total,
     query_agent_traces,
+    FRAME_QUERY_DEFAULT_LIMIT,
     query_alerts,
     query_counts_by_event_type,
     query_descriptions,
     query_events_for_track,
+    query_frames_by_class,
+    query_frames_for_track,
+    query_frames_in_time_window,
+    query_objects_by_class,
     query_run_summary,
     query_tracks_by_class,
     record_agent_call,
@@ -63,6 +68,7 @@ ALLOWED_TOOLS = frozenset(
         "get_events_for_track",
         "get_descriptions",
         "counts_by_event_type",
+        "query_frames",
     }
 )
 
@@ -310,6 +316,34 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_frames",
+            "description": (
+                "Read-only frame index. Query 'time_window' (frames between two "
+                "ISO timestamps), 'class_frames' (frames containing a class), "
+                "'class_objects' (detections of a class) or 'track_frames' "
+                "(all frames for a track). Returns compact JSON text only, no images."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "integer"},
+                    "query": {
+                        "type": "string",
+                        "enum": ["time_window", "class_frames", "class_objects", "track_frames"],
+                    },
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                    "class_name": {"type": "string"},
+                    "track_id": {"type": "integer"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["run_id", "query"],
+            },
+        },
+    },
 ]
 
 
@@ -420,6 +454,40 @@ def _run_tool(tool_name: str, args: dict, db: Any) -> str:
             for d in rows
         ]
         return json.dumps(compact_rows(result))
+
+    if tool_name == "query_frames":
+        mode = args.get("query")
+        if "run_id" not in args or mode is None:
+            return json.dumps({"error": "query_frames requires run_id and query"})
+        run_id = int(args["run_id"])
+        limit = int(args.get("limit", FRAME_QUERY_DEFAULT_LIMIT))
+        if mode == "time_window":
+            if "start" not in args or "end" not in args:
+                return json.dumps({"error": "time_window requires start and end"})
+            result = query_frames_in_time_window(
+                db, run_id=run_id, start=args["start"], end=args["end"], limit=limit
+            )
+        elif mode == "class_frames":
+            if "class_name" not in args:
+                return json.dumps({"error": "class_frames requires class_name"})
+            result = query_frames_by_class(
+                db, run_id=run_id, class_name=args["class_name"], limit=limit
+            )
+        elif mode == "class_objects":
+            if "class_name" not in args:
+                return json.dumps({"error": "class_objects requires class_name"})
+            result = query_objects_by_class(
+                db, run_id=run_id, class_name=args["class_name"], limit=limit
+            )
+        elif mode == "track_frames":
+            if "track_id" not in args:
+                return json.dumps({"error": "track_frames requires track_id"})
+            result = query_frames_for_track(
+                db, run_id=run_id, track_id=int(args["track_id"]), limit=limit
+            )
+        else:
+            return json.dumps({"error": f"unknown query_frames mode: {mode}"})
+        return json.dumps(result)
 
     # counts_by_event_type
     counts = query_counts_by_event_type(db, run_id=args.get("run_id"))

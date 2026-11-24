@@ -469,3 +469,66 @@ Audit P2 findings left open: h1→h3 heading jump, missing crop alt text, sessio
 ### Unresolved findings from web-design-guidelines review
 `app/pages/*.py`: headings skip h2 where `st.subheader` renders h3; `st.image` has a caption but no alt text; the Ask placeholder does not end with `…`; the Ask error text now has a next step; page, theme and run state stay in `session_state` rather than the URL; and meta strings use `·` separators as a dense ops-console convention. These are P2/P3 and were not changed in this visual-polish step.
 
+## Frame index (frame-by-frame index) — 24 Nov 2026
+
+### What was built
+`frames` (one row per sampled frame) and `frame_objects` (one row per detection) plus three indexes, a self-committing idempotent `store_frame_index`, collection inside the tracking loop, a backfill script that reuses each run's stored tuning, four read-only row-limited queries, the `query_frames` agent tool and `scripts/query_frames.py`. No Streamlit page, no OpenAI/VLM call.
+
+### First failure (honest record)
+The first version of the backfill check required set equality between frame-index track IDs and `tracks`. Run 1 failed:
+
+```
+track_id_check: FAIL run_id=1
+  only_in_frame_index=[113, 131]
+  only_in_tracks=[]
+  Refusing to force a match; inspect the run before using its index.
+```
+
+Both IDs had exactly one detection (frame 139 conf 0.331, frame 167 conf 0.463) and zero events: short-lived ByteTrack detections that never became confirmed tracks. Storing every detection is deliberate, so forcing equality would mean deleting real detections. The human chose option (a): require only that every confirmed ID is present, and report extras as `unconfirmed_detections`. The check was changed; no index rows were filtered.
+
+### Result after the change (raw output)
+```
+DB_SIZE_BEFORE=389120
+protected_data_check: PASS run_id=1
+track_id_check: PASS run_id=1 confirmed_tracks_present=33 frame_ids=35
+  unconfirmed_detections: count=2 ids=[113, 131]
+run_id=1 frames=167 objects=1287 device=cuda:0
+real 0m38.209s
+
+protected_data_check: PASS run_id=2
+track_id_check: PASS run_id=2 confirmed_tracks_present=23 frame_ids=25
+  unconfirmed_detections: count=2 ids=[5, 592]
+run_id=2 frames=184 objects=868 device=cuda:0
+real 0m47.324s
+```
+The run-1 extras are the same two IDs; run 2 also passes.
+
+### Row counts and protected data (read-only check)
+| Metric | Run 1 | Run 2 |
+|--------|-------|-------|
+| frames rows | 167 | 184 |
+| frame_objects rows | 1287 | 868 |
+| tracks | 33 | 23 |
+| events | 166 | 105 |
+| alerts | 22 | 11 |
+| descriptions | 33 | 23 |
+| run_summaries | 1 | 1 |
+| agent_costs rows / traces rows (all runs) | 19 / 7 | — |
+
+OpenAI cost total before and after: **$0.09634725** (19 rows) — unchanged. `runs` = 2 throughout; no run was created, moved or deleted.
+
+Database size: **180224 bytes** before any backfill → **389120 bytes** after run 1 → **516096 bytes** after run 2.
+
+### Query evidence (raw output)
+- `query_frames.py --run 2 --class truck --limit 1000`: `frames with class=truck run=2 / total=176 showing=176 truncated=False`; `detections of class=truck run=2 / total=386 showing=386 truncated=False`; `distinct_track_ids=[2, 47, 103, 196, 326, 330, 360, 410, 472]`. All six expected confirmed truck IDs (2, 103, 326, 330, 360, 410) are present. The three extras (47, 196, 472) are **confirmed tracks stored with class `car`** that received at least one truck-class frame vote — the known per-frame class instability, not invented IDs.
+- `query_frames.py --run 1 --from 2026-11-23T23:59:55 --to 2026-11-24T00:00:10`: `total=160`; with `--limit 1000`, 50 rows on 2026-11-23 and 110 on 2026-11-24; the first post-midnight row is `frame=51 timestamp=2026-11-24T00:00:00`, last is `frame=160 timestamp=2026-11-24T00:00:10`. The window crosses midnight with no special handling.
+- `query_frames.py --run 2 --track 103`: `total=85 showing=50 truncated=True`, `showing 50 of 85`; frames 56–106, 14:00:05–14:00:10 across garage/driveway/perimeter.
+
+### Tests
+`.venv/bin/python -m pytest -q` → **83 passed in 4.27s** (was 81; +2 backfill-ID-check tests). Two tests cover the new rule: extras allowed and reported; a missing confirmed track fails the check.
+
+### Limits observed
+- The ID check cannot distinguish one object split across IDs from two unconfirmed detections; it only guarantees no confirmed track is missing.
+- Per-frame class votes can disagree with a track's stored class, so a class query is a detection-level query, not a confirmed-track query.
+- The backfill uses the run's stored YOLO/tracking settings; patrol waypoints, dwell time and altitude are not stored in `tuning_settings`, so current config defaults were used.
+
