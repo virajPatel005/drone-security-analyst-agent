@@ -6,7 +6,7 @@ import streamlit as st
 
 from src.config import settings
 
-from app import agent_ui, data
+from app import agent_ui, data, styles
 
 
 def render(run: data.RunInfo) -> None:
@@ -24,8 +24,6 @@ def render(run: data.RunInfo) -> None:
     finally:
         conn.close()
 
-    st.markdown(f"**Source video:** {run.video_name}")
-    st.markdown(f"**Simulated start time:** {run.start_time}")
     left, middle, right = st.columns(3)
     left.metric("Tracks", counts.tracks)
     middle.metric("Events", counts.events)
@@ -41,8 +39,22 @@ def render(run: data.RunInfo) -> None:
         )
         if not state.can_call:
             st.warning(f"Summary generation disabled. {state.blocked_reason}")
-        elif st.button("Generate summary"):
-            agent_ui.generate_summary(run.id)
+        elif st.session_state.get("confirm_summary"):
+            st.warning(
+                f"Confirm one {settings.OPENAI_MODEL_NAME} call at about ${expected:.6f}. "
+                "Only stored text is sent."
+            )
+            yes, no = st.columns(2)
+            if styles.primary_button("Confirm spend"):
+                with st.spinner("Generating stored-text summary…"):
+                    agent_ui.generate_summary(run.id)
+                st.session_state.pop("confirm_summary", None)
+                st.rerun()
+            if no.button("Cancel"):
+                st.session_state.pop("confirm_summary", None)
+                st.rerun()
+        elif styles.primary_button("Generate summary"):
+            st.session_state["confirm_summary"] = True
             st.rerun()
         return
 
@@ -73,7 +85,7 @@ def render(run: data.RunInfo) -> None:
             for item in notable
             if isinstance(item, dict)
         ]
-        st.dataframe(rows, hide_index=True)
+        st.table(rows)
     else:
         st.caption("None listed in the stored summary.")
 

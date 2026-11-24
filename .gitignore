@@ -65,3 +65,13 @@ data/crops/
 # OS
 .DS_Store
 Thumbs.db
+
+# Impeccable working context (local design tooling, not prototype deliverables).
+# Runtime directories it creates for itself: questions/, mocks/, review/,
+# critique snapshots/ and config.local.json.
+.impeccable/
+PRODUCT.md
+DESIGN.md
+
+# Playwright MCP session artifacts (console logs and traces)
+.playwright-mcp/

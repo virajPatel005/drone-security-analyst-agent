@@ -53,3 +53,23 @@
 - **Ask gating.** Text box and buttons are disabled with an explicit reason when the OpenAI key is absent or the SQLite-backed running total has reached the cap. Key presence is checked as a boolean only; no key or header is printed or stored by the UI.
 - **Plain default styling:** no custom theme, CSS or component library; only standard Streamlit widgets. The app is started from the repo root with `streamlit run app/streamlit_app.py`; `app/streamlit_app.py` inserts the repo root into `sys.path`, the same fix used by `scripts/ask_agent.py`.
 
+## Step 9B: visual direction (shape note)
+
+**Design read:** an Operate-mode security console for a reviewer and a screen-recording hiring reviewer, with a calm, dense, evidence-first language, leaning on native Streamlit structure plus a single token-driven CSS layer — no marketing voice.
+
+Dials: `DESIGN_VARIANCE 3`, `MOTION_INTENSITY 2`, `VISUAL_DENSITY 7`. The information is the interface; decoration must not compete with it.
+
+- **Tokens in one place:** `app/styles.py` is the only source of colour, type, spacing, radius and state rules. Both themes come from one semantic token set; the DOM carries a `data-theme` attribute. Streamlit 1.67.0 themes natively only at startup through `.streamlit/config.toml`, so the in-app toggle is a CSS-injection switch; this is stated plainly in the report alongside any element that does not follow it.
+- **One accent:** restrained teal (`#5BA6B8` dark fill, `#176C7B` light fill) for the single primary action and current selection. Severity uses amber (warning) and blue (info) only; green/red are reserved for status, never decoration. No purple-to-blue gradients, no glow, no emoji headings.
+- **Type:** system sans for prose and labels, monospace with `font-variant-numeric: tabular-nums` for IDs, timestamps, counts and costs. No network font loading. Fixed rem scale, 1.125–1.2 ratio between steps.
+- **Shape:** sidebar holds brand, run, navigation, theme switch and a simulated-clock footer. A compact context strip in the main area keeps the selected run visible when the sidebar is collapsed. Tables use hairline separators rather than stacked cards; no card nested in a card, no icon tiles above headings.
+- **States:** every control has default, hover, focus-visible, active and disabled definitions in both themes; minimum 40 px control height, 4 px control radius, 2 px panel radius, spacing scale 4/8/12/16/24/32.
+- **Honesty limits:** simulated time/zones and "alerts count tracks, not objects" stay visible on the main surface of every page, not only in docs.
+
+### Step 9B implementation decisions and repairs
+- **Runtime theme toggle is CSS injection, not native Streamlit theming.** Streamlit 1.67.0 only reads `[theme] base` from `.streamlit/config.toml` at process start; there is no supported runtime theme API. `app/styles.py` injects one stylesheet through a same-origin component script and sets `data-theme` on `<html>`. All semantic tokens, tables, badge, timeline and crop-image frames follow it. Native Streamlit chrome that still ignores CSS variables: the sidebar expand/collapse icons and the radio/switch thumb are drawn by Streamlit's own design system; their surrounding surfaces and focus rings do follow the tokens, and the component iframe emits a benign sandbox warning in the browser console.
+- **Tables use `st.table`, not `st.dataframe`.** The dataframe is canvas-backed and paints its own light-mode text, so it cannot be rethemed; the static HTML table renders with the same tokens in both themes. Row counts are small (a few dozen), so the loss of virtualisation is not material.
+- **P1 repairs found by render checks:** the first CSS hid the whole `stHeader`, which also hid the sidebar expand button; hiding only toolbar actions fixed it. Context `<code>` chips inherited a white browser background in dark mode; they are now transparent. Table cells had Streamlit's dark-on-light text colour; they are now overridden from semantic tokens. All three were verified by re-screenshot.
+- **No module hot reload for edits to imported files.** Streamlit watches the entry script, not imported modules; after each `app/styles.py` or page edit the server was restarted before taking screenshots. This is a workflow note, not an app behaviour.
+- **`st.badge` needs a direct class override.** Streamlit 1.67 emits `.stMarkdownBadge` with inline light-mode colours and no `data-testid`, so the questionable-alert badge was identical in both themes until a semantic-token rule with `!important` targeted that class. The other badges use tokens via our own `.ops-chip` classes.
+

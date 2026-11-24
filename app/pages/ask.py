@@ -6,7 +6,7 @@ from typing import Any
 
 import streamlit as st
 
-from app import agent_ui, data
+from app import agent_ui, data, styles
 
 EXAMPLE_QUESTIONS = (
     "Were any vehicles seen after midnight? Give times and track ids.",
@@ -26,7 +26,12 @@ def render(run: data.RunInfo) -> None:
     st.caption(f"Source video: {run.video_name} · simulated start: {run.start_time}")
     st.markdown("**Example questions**")
     for index, question in enumerate(EXAMPLE_QUESTIONS):
-        if st.button(question, key=f"example_{index}", disabled=not state.can_call):
+        if st.button(
+            question,
+            key=f"example_{index}",
+            disabled=not state.can_call,
+            help="Example question",
+        ):
             st.session_state["ask_question"] = question
             st.rerun()
 
@@ -42,14 +47,29 @@ def render(run: data.RunInfo) -> None:
         disabled=not state.can_call,
         placeholder="Type a question about the stored events and alerts",
     )
-    if st.button("Ask", disabled=not state.can_call or not question.strip()):
-        try:
-            result = agent_ui.ask(run.id, question.strip())
-        except Exception as exc:
-            # Show the failure, never a key or request header.
-            st.error(f"Ask failed: {type(exc).__name__}: {exc}")
-        else:
-            _show_result(run, result)
+    pending = st.session_state.get("confirm_ask")
+    if pending and pending == question.strip():
+        st.warning("Confirm one stored-text call for this question. Only stored text is sent.")
+        yes, no = st.columns(2)
+        if styles.primary_button("Confirm question"):
+            with st.spinner("Asking the stored-text agent…"):
+                try:
+                    result = agent_ui.ask(run.id, question.strip())
+                except Exception as exc:
+                    # Show the failure and a next step; never a key or header.
+                    st.error(
+                        f"Ask failed: {type(exc).__name__}: {exc}. "
+                        "Check the key and cost cap, then retry or inspect Traces."
+                    )
+                else:
+                    st.session_state.pop("confirm_ask", None)
+                    _show_result(run, result)
+        if no.button("Cancel"):
+            st.session_state.pop("confirm_ask", None)
+            st.rerun()
+    elif styles.primary_button("Ask", disabled=not state.can_call or not question.strip()):
+        st.session_state["confirm_ask"] = question.strip()
+        st.rerun()
 
 
 def _show_result(run: data.RunInfo, result: dict[str, Any]) -> None:

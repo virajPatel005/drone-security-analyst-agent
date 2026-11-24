@@ -19,7 +19,7 @@ def render(run: data.RunInfo) -> None:
         st.info("No agent traces are stored for this run.")
         return
 
-    st.dataframe(
+    st.table(
         [
             {
                 "id": trace.id,
@@ -31,8 +31,7 @@ def render(run: data.RunInfo) -> None:
                 "cost_usd": round(trace.estimated_cost_usd, 6),
             }
             for trace in traces
-        ],
-        hide_index=True,
+        ]
     )
 
     for trace in traces:

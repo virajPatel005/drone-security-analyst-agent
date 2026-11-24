@@ -35,10 +35,14 @@ def test_every_page_renders_without_key_or_agent_calls(
 
     entrypoint = Path(__file__).resolve().parents[1] / "app" / "streamlit_app.py"
     at = AppTest.from_file(entrypoint, default_timeout=30)
-    for page, marker in PAGES.items():
-        at.session_state["page"] = page
-        at.run()
-        assert not at.exception, f"{page} failed: {[str(e.value) for e in at.exception]}"
-        assert any(marker in element.value for element in at.subheader), (
-            f"{page} did not render its own content"
-        )
+    # Dark is the default; light is the toggle state. Both must render cleanly.
+    for light in (False, True):
+        at.session_state["theme_light"] = light
+        for page, marker in PAGES.items():
+            at.session_state["page"] = page
+            at.run()
+            label = f"{'light' if light else 'dark'}/{page}"
+            assert not at.exception, f"{label} failed: {[str(e.value) for e in at.exception]}"
+            assert any(marker in element.value for element in at.subheader), (
+                f"{label} did not render its own content"
+            )

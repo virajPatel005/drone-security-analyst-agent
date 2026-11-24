@@ -395,3 +395,77 @@ Command: `.venv/bin/python -m streamlit run app/streamlit_app.py --server.addres
 ### Run command
 From the repo root: `streamlit run app/streamlit_app.py`. To bind explicitly: `streamlit run app/streamlit_app.py --server.address 127.0.0.1 --server.port 8501`.
 
+## Step 9B: visual polish, themes and screenshots (24 Nov 2026)
+
+### Run command (final)
+From the repo root: `streamlit run app/streamlit_app.py`. The app binds to `127.0.0.1:8501` in the checks below via `--server.address 127.0.0.1 --server.port 8501 --server.headless true --browser.gatherUsageStats false`. No new dependency was added in 9B; Streamlit 1.67.0 from 9A is unchanged.
+
+### Theme mechanism
+Installed Streamlit is `1.67.0`. Its native `[theme] base` setting is read at process start only, so an in-app toggle cannot use it. The implemented toggle injects one stylesheet through a same-origin component script and sets `data-theme` on `<html>`; all tokens resolve from that attribute. Plain HTML tables (`st.table`) replaced `st.dataframe` because the latter is canvas-backed and paints its own light-mode text. Native Streamlit radio dots, switch thumb and expand/collapse icons keep their own drawn glyph colours; their surrounding surfaces, borders and focus rings follow the tokens.
+
+### Measured contrast (better-colors, WCAG 2)
+Ratios were computed from the declared token pairs with a local script; AA thresholds are 4.5:1 for body text and 3:1 for UI components.
+
+| Pair | Dark | Light |
+|------|------|-------|
+| Body text on page | `#E6EDF0` / `#0F1418` = 15.65:1 | `#162228` / `#F4F7F8` = 15.08:1 |
+| Secondary text on panel | `#A9BBC2` / `#151C21` = 8.67:1 | `#3E525B` / `#FBFCFC` = 7.97:1 |
+| Muted text on panel | `#95A9B1` / `#151C21` = 7.04:1 | `#5B7079` / `#FBFCFC` = 5.06:1 |
+| Text on primary button | `#071115` / `#5BA6B8` = 6.90:1 | `#F7FAFA` / `#176C7B` = 5.77:1 |
+| Warning chip | `#F0B75E` / `#332613` = 8.15:1 | `#7A4E08` / `#FFF3DB` = 6.54:1 |
+| Info chip | `#A9CBE9` / `#162734` = 9.03:1 | `#1E4E76` / `#E8F1F9` = 7.64:1 |
+| Success/status chip | `#9AD3B2` / `#143026` = 8.33:1 | `#1B603E` / `#E6F4EB` = 6.63:1 |
+| Control border on page (UI) | `#5A707A` / `#0F1418` = 3.56:1 | `#71868E` / `#F4F7F8` = 3.54:1 |
+| Focus ring on page (UI) | `#8FD3E2` / `#0F1418` = 11.10:1 | `#0F6676` / `#F4F7F8` = 6.13:1 |
+
+All pairs pass AA. Colours were not repainted to chase a failing pair; border tokens were chosen to meet the 3:1 UI threshold before the final measurement.
+
+### Screenshots
+32 final PNGs in `docs/screenshots/`: every page (Overview, Alerts, Ask, Traces) in dark and light, with the sidebar open and collapsed, at 1440×900 and 820×900. File pattern `<page>-<theme>-<width>-<state>.png`. Largest file is 131 KB, all under the 400 KB limit. Two pre-redesign captures are kept for comparison: `before-overview-dark-1440-open.png` and `before-alerts-dark-1440-open.png`; their after images are `overview-dark-1440-open.png` and `alerts-dark-1440-open.png`. Playwright MCP drove `http://127.0.0.1:8501` headlessly on loopback only; no external site was visited.
+
+### Tests
+`.venv/bin/python -m pytest -q` → `70 passed in 1.67s` after the final code edits. The AppTest smoke test now renders all four pages twice, once with `theme_light=False` and once with `True`, still with the OpenAI key absent and both agent entry points replaced by raising fakes. No network or OpenAI call was made.
+
+### Real failures encountered and fixed
+1. `impeccable context` reported no product record; init was completed with the human's corrected product context before any UI edit.
+2. First AppTest path used a repo-relative path; AppTest resolves against the test file. (9A regression check; fixed there and unchanged.)
+3. The first design CSS hid `stHeader`, which also hid the sidebar expand button, making a collapsed sidebar impossible to reopen. Only toolbar actions are hidden now; collapse/re-expand was re-tested in the browser.
+4. Context `<code>` chips inherited a white browser background in dark mode, making values unreadable. They are transparent now.
+5. `st.dataframe` cells and then `st.table` cells kept Streamlit's dark-on-light text, leaving tables visually empty in dark mode. Tables were switched to `st.table` with token-driven cell colours and verified by screenshot.
+6. Several screenshot batches captured Streamlit's rerender skeleton (empty table area) because waits matched stale cells. Final captures use fixed post-rerender waits and were visually inspected.
+7. Streamlit watches the entry script, not imported modules; `app/styles.py` edits required a server restart before screenshots. Early captures were stale and were discarded.
+
+### Not run in Step 9B
+- The Ask page against real OpenAI, and the Overview Generate-summary button.
+- No commit was made; screenshots and style files remain uncommitted pending approval.
+
+### Skills actually used
+`impeccable` (context, init/shape, critique, audit, polish rules), `design-taste-frontend` (Design Read and anti-slop dials), `frontend-design` (plan → self-critique, component vocabulary), `better-colors` (token ramps and measured contrast), `building-components` (tokens, states, keyboard/focus accessibility), `web-design-guidelines` (guidelines re-fetched from source and applied to the final files). The installed impeccable skill folder contains no README; its init reference was used for the ephemeral `.gitignore` entries instead, and that substitution is reported to the human.
+
+### Impeccable critique (Assessment A, design review)
+Method: two isolated sub-assessments were requested; Assessment A is complete. It scored 27/40 on the Nielsen heuristics ("Acceptable"): visibility 3, match 3, control 3, consistency 3, prevention 2, recognition 3, flexibility 2, aesthetics 4, recovery 2, help 2. Strengths recorded: on-page simulation disclosure, a real token system with AA contrast, and the alert→track→event→VLM→crop evidence chain.
+
+**[P0] Not fixed — outside 9B scope.** `app/data.py` searches only `vehicle`/`person` track classes, while `data/demo.db` stores `car` (50) and `truck` (6). Overview therefore shows `Tracks 0` beside 22 alerts, and the Alerts provenance panel shows "No stored track row for this alert" for every alert. This is a pre-existing 9A data-layer defect, not a visual defect; fixing it requires changing `app/data.py`, which the human explicitly forbade in this step. It is reported as a blocker for the next data step.
+
+**P1 fixes applied in presentation code only:** money-spending buttons now use a two-step confirm plus `st.spinner`, Ask failures include a next step, the alerts table drops an all-empty zone column and shows clock times in the scan table, and tuning settings moved into an expander. The critique's other P1 (bounding "Notable alerts" and shortening raw timestamps in the summary table) was left unchanged to preserve the full stored-summary data required by Step 9A.
+
+### Impeccable critique (Assessment B, deterministic evidence)
+Method: dual-agent run completed; Assessment B used the bundled detector and Playwright MCP in a fresh tab. Source scan `impeccable detect --json app/streamlit_app.py app/styles.py app/pages/*.py` returned `[]`, exit 0 — a coverage-limited clean result because the detector regex-scans source and does not parse CSS inside Python strings. URL scanning was unavailable: the host has no Chrome/Chromium/Edge/Brave binary, and the tool exited 1 with that exact error; nothing was installed. Browser evidence: both themes apply to table headers/cells, warning/status chips, timeline dots/text, crop image borders and context strip; sidebar collapse/re-expand works with the run still shown in the main area; focus-visible rings were observed on combobox, text input, switch and radio; document scrollWidth equals clientWidth at 1440 and 820 with no horizontal overflow; console errors 0. Warnings are framework-owned (Chromium permissions-policy notices and the component iframe sandbox notice).
+**[P1] Fixed:** the "Flagged questionable by the stored summary" badge emitted by `st.badge()` carries inline light-mode colours and no `data-testid`, so it ignored both themes. CSS now targets `.stMarkdownBadge` with `!important` semantic tokens; table header type also now follows `--sans`. Both were verified by the final screenshot pass.
+**[P3] Not fixed:** native Streamlit radio dots, switch thumb and expand/collapse icons keep their framework-drawn colours; the header toolbar button has no visible focus ring (framework-owned). The detector's `[]` is not claimed as proof of a clean UI.
+
+### Impeccable audit (code-level)
+| Dimension | Score | Key finding |
+|-----------|-------|-------------|
+| Accessibility | 3 | AA contrast and focus rings pass; heading levels skip h2 and crop image has no alt text. |
+| Performance | 4 | No layout reads, no heavy animation, small static assets. |
+| Theming | 4 | One token set drives both themes; runtime toggle needs CSS injection on Streamlit 1.67. |
+| Responsive design | 3 | Usable and overflow-free at 1440 and 820; no layout work below 820 was requested. |
+| Implementation integrity | 3 | Single styles module; native Streamlit glyphs and the component iframe remain outside full token control. |
+| **Total** | **17/20** | **Good** |
+
+Audit P2 findings left open: h1→h3 heading jump, missing crop alt text, session-only (not URL) page/theme/run state, and the `st.badge` orange glyph bypassing the token palette. None blocks the reviewer task.
+
+### Unresolved findings from web-design-guidelines review
+`app/pages/*.py`: headings skip h2 where `st.subheader` renders h3; `st.image` has a caption but no alt text; the Ask placeholder does not end with `…`; the Ask error text now has a next step; page, theme and run state stay in `session_state` rather than the URL; and meta strings use `·` separators as a dense ops-console convention. These are P2/P3 and were not changed in this visual-polish step.
+
