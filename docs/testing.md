@@ -369,3 +369,29 @@ trace 1 time=2026-11-24T09:30:13 mode=ask cached=0 question='Were any vehicles s
 `.venv/bin/python scripts/ask_agent.py ask 2 "List every event for track 103, with timestamps and types."` returned the six stored track-103 events (appeared/entered_zone x4/left, 14:00:05-14:00:14) with `stats: model=gpt-5.4-mini prompt_tokens=3404 completion_tokens=133 latency_s=1.583 cost_usd=0.003151 running_total_usd=0.061049`; `traces 2` → `trace 2 time=2026-11-24T09:36:24 mode=ask cached=0 question='List every event for track 103, with timestamps and types.' tools=[none] cost_usd=0.003151` — no tool call, kept as evidence of the gap.
 After the prompt-only follow-up fix: `ask 2 "List every event for track 47, with timestamps and types."` returned all 10 events with `stats: model=gpt-5.4-mini prompt_tokens=7588 completion_tokens=259 latency_s=2.977 cost_usd=0.006856 running_total_usd=0.070949`, and `traces 2` shows `trace 4 ... tools=[get_events_for_track]` — the model now calls the tool. All 10 event types/timestamps match `SELECT event_type, timestamp FROM events WHERE run_id=2 AND track_id=47 ORDER BY timestamp` exactly. `ask 1 "What colour was the driver's jacket?"` still answered "Run 1: ... the data cannot tell" with `trace 5 ... tools=[list_runs]`, $0.005843, inventing nothing.
 Track 47 gap finding: the stored events show `left` at `14:00:10` followed by a fresh `appeared` at `14:00:12`, so the 15.0 s `loitering` alert (first_seen 14:00:03, last_seen 14:00:18) spans two track visits and includes a 2 s gap — the dwell figure is not continuous presence.
+
+## Step 9A: Streamlit app smoke and real start (24 Nov 2026)
+
+### Dependency
+`.venv/bin/python -m pip index versions streamlit` → latest `1.67.0`. Streamlit was missing, so it was installed and pinned as `streamlit==1.67.0` in `requirements.txt`. Pip also installed streamlit's own transitive packages (altair, pandas, pyarrow, pydeck, protobuf, watchdog, uvicorn and others); no other direct dependency was added.
+
+### Tests (no network, no OpenAI)
+`.venv/bin/python -m pytest -q tests/test_app_data.py tests/test_app_ui.py` → `6 passed in 0.83s`. Five data-layer tests use a temporary database with fake rows: three tracks, eight events with a 23:59:58 → 00:00:03 midnight crossing, a `vehicle_at_night` alert only for the post-midnight track, a `heavy_vehicle_logged` info alert whose VLM description says "brick building facade", a stored summary flagging that track as questionable, costs and two traces. They assert typed rows, filters, provenance, the summary-only badge, SQLite-backed cost state, cap blocking and that the UI connection rejects writes.
+
+The UI smoke test patches both captured `DB_PATH` values to the temp DB, removes the OpenAI key from the environment, replaces `agent_ui.generate_summary` and `agent_ui.ask` with functions that raise, then renders Overview, Alerts, Ask and Traces through `AppTest`. Each page must have no exception and its own subheader. No agent function was called.
+
+Full suite: `.venv/bin/python -m pytest -q` → `70 passed in 1.19s`. The six new tests account for the rise from 64 to 70 (the Step 8 log separately records 61 at the end of that step).
+
+One failure during this step: the first `AppTest.from_file("app/streamlit_app.py")` call raised `FileNotFoundError` because AppTest resolves relative paths against the calling test file, not the repo root. Fixed by passing an absolute path built from `Path(__file__).resolve().parents[1]`; reran and all tests passed.
+
+### Real server check
+Command: `.venv/bin/python -m streamlit run app/streamlit_app.py --server.address 127.0.0.1 --server.port 8501 --server.headless true --browser.gatherUsageStats false`, started from the repo root with output redirected to `/tmp/opencode/streamlit_step9.log`. `curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://127.0.0.1:8501/_stcore/health` → `HTTP 200`. The process was killed by its PID; a subsequent socket connect to `127.0.0.1:8501` printed `port 8501 free`. No browser session was used and no OpenAI call was made.
+
+### Not run in Step 9A
+- The Ask page against real OpenAI (no question was submitted).
+- The Overview "Generate summary" button (no new model call).
+- Step 9B (styling / extra presentation work) was not started.
+
+### Run command
+From the repo root: `streamlit run app/streamlit_app.py`. To bind explicitly: `streamlit run app/streamlit_app.py --server.address 127.0.0.1 --server.port 8501`.
+
