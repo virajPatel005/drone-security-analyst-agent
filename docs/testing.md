@@ -532,3 +532,55 @@ Database size: **180224 bytes** before any backfill → **389120 bytes** after r
 - Per-frame class votes can disagree with a track's stored class, so a class query is a detection-level query, not a confirmed-track query.
 - The backfill uses the run's stored YOLO/tracking settings; patrol waypoints, dwell time and altitude are not stored in `tuning_settings`, so current config defaults were used.
 
+## Text-simulation demo (no models, no network)
+
+Honesty note: this demo tests the **alert and index logic only, not vision**. No YOLO, ByteTrack, VLM, LM Studio or OpenAI call is made; objects are hand-labelled in JSONL.
+
+### Tests
+`.venv/bin/python -m pytest -q` → **96 passed in 4.05s** (was 83; +13 in `tests/test_text_demo.py`). Coverage: parser valid/invalid input (missing `time`, unknown class, bad time format, out-of-order frames), one track per label, midnight and truck alerts, quiet negative control, idempotency, frame queries by window/class/track, stored description, and parsing of the three committed scenario files.
+
+### Expected versus actual alerts
+| Scenario | Expected | Actual |
+|---|---|---|
+| midnight_gate | `person_at_night` 1, `loitering` 1, others 0 | identical |
+| daytime_truck | `heavy_vehicle_logged` 1, two appearances of one truck track | identical; `loitering` also fired (see limits) |
+| quiet_daytime | no alerts | no alerts |
+
+Raw output from `scripts/run_text_demo.py --db data/text_demo.db`:
+```
+run_id: 1 source: text-simulated:midnight_gate frames=6 objects=4 tracks=1 events=3
+  track=1 class=person first_seen=2026-11-24T00:00:00 last_seen=2026-11-24T00:03:00
+  alerts: vehicle_at_night 0, person_at_night 1, loitering 1, heavy_vehicle_logged 0
+run_id: 2 source: text-simulated:daytime_truck frames=6 objects=5 tracks=1 events=6
+  track=1 class=truck first_seen=2026-11-24T12:00:00 last_seen=2026-11-24T16:01:00
+  alerts: vehicle_at_night 0, person_at_night 0, loitering 1, heavy_vehicle_logged 1
+run_id: 3 source: text-simulated:quiet_daytime frames=3 objects=2 tracks=1 events=3
+  track=1 class=person first_seen=2026-11-24T12:00:00 last_seen=2026-11-24T12:00:03
+  alerts: vehicle_at_night 0, person_at_night 0, loitering 0, heavy_vehicle_logged 0
+```
+Event types: run 1 = 1 appeared / 1 entered_zone / 1 left; run 2 = 2 / 2 / 2; run 3 = 1 / 1 / 1. Text DB totals: runs 3, tracks 3, events 12, frames 15, frame_objects 11, alerts 4.
+
+### Frame queries (raw output)
+`scripts/query_frames.py --db data/text_demo.db --run 1 --class person --limit 1000` → `total=4 showing=4 truncated=False`, frames 3–6, `distinct_track_ids=[1]`.
+`scripts/query_frames.py --db data/text_demo.db --run 1 --from 2026-11-23T23:59:00 --to 2026-11-24T00:03:00 --limit 1000` → `total=6 showing=6 truncated=False`, frames 1–6, crossing midnight without special handling. Example stored frame row: `frame=3 timestamp=2026-11-24T00:00:00 zone=gate detections=1 description='A person in a dark jacket is now standing at the main gate.'`
+
+### Idempotency (real DB)
+Before re-running `midnight_gate`: `runs 3, tracks 3, events 12, frames 15, frame_objects 11, alerts 4`; after: identical, and the script again reported `run_id: 1`.
+
+### Protected data (read-only check)
+`data/demo.db`: runs 2; tracks 33/23; alerts 22/11; frames 167/184; cost total `$0.09634725`. Unchanged from the baseline measured before this work.
+
+### Failure found before implementation (shown, not worked around)
+Probing the unmodified rule on a temporary in-memory DB printed:
+```
+night_window: 0 5
+stored first_seen: ('2026-11-23T23:59:00', '2026-11-24T00:03:00')
+person_at_night alerts for 23:59->00:03 person: 0
+```
+`person_at_night` checks only the hour of `first_seen`, so a person present from 23:59 cannot fire it. The human chose to keep the gate empty until 23:59:59 and first see the person at 00:00:00. Future work: check presence anywhere in the night window instead of first-seen hour.
+
+### Other limits
+- The truck's `loitering` alert spans both visits (12:00→16:01) including the four-hour gap; the existing rule measures `last_seen - first_seen` across all events, so this is not continuous presence. Left unchanged.
+- Hand-written labels are certainties (`confidence=1.0`) and boxes are placeholders `(0,0,0,0)`; neither is a real detection. No crop or VLM call is made.
+- The Streamlit app reads only `demo.db`, so these text runs are not visible there in this step. Step 10 and Step 11 were not started.
+

@@ -1,0 +1,5 @@
+# Negative control: a brief daytime visit that must raise no alert.
+# The person is present for 3 seconds, below the 5-second loitering threshold.
+{"date":"2026-11-24","time":"12:00:00","zone":"gate","description":"A visitor walks up to the main gate in daylight.","objects":[{"class":"person","label":"daytime-visitor","color":"grey","text":"visitor at the gate"}]}
+{"date":"2026-11-24","time":"12:00:03","zone":"gate","description":"The visitor pauses briefly at the gate.","objects":[{"class":"person","label":"daytime-visitor","color":"grey","text":"visitor pausing"}]}
+{"date":"2026-11-24","time":"12:05:00","zone":"gate","description":"The gate is quiet again.","objects":[]}

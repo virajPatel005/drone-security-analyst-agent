@@ -1,0 +1,8 @@
+# Text-simulation scenario: the same blue pickup is logged twice in one day.
+# Both sightings share one stable label, so they are one track with two visits.
+{"date":"2026-11-24","time":"12:00:00","zone":"garage","description":"A blue pickup truck is parked in the garage at noon.","objects":[{"class":"truck","label":"blue-pickup","color":"blue","text":"blue pickup truck in the garage"}]}
+{"date":"2026-11-24","time":"12:01:00","zone":"garage","description":"The blue pickup is still in the garage.","objects":[{"class":"truck","label":"blue-pickup","color":"blue","text":"blue pickup still parked"}]}
+{"date":"2026-11-24","time":"12:02:00","zone":"garage","description":"The blue pickup leaves the garage.","objects":[{"class":"truck","label":"blue-pickup","color":"blue","text":"blue pickup leaving"}]}
+{"date":"2026-11-24","time":"12:05:00","zone":"garage","description":"The garage is empty after midday.","objects":[]}
+{"date":"2026-11-24","time":"16:00:00","zone":"garage","description":"The same blue pickup truck returns to the garage in the afternoon.","objects":[{"class":"truck","label":"blue-pickup","color":"blue","text":"same blue pickup back in the garage"}]}
+{"date":"2026-11-24","time":"16:01:00","zone":"garage","description":"The blue pickup remains in the garage at the end of the scan.","objects":[{"class":"truck","label":"blue-pickup","color":"blue","text":"blue pickup still there"}]}

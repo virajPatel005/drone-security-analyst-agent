@@ -113,3 +113,11 @@ PATROL_LOCATIONS = tuple(label for label, _, _ in PATROL_WAYPOINTS)
 PATROL_SECONDS_PER_LOCATION = float(os.getenv("PATROL_SECONDS_PER_LOCATION", "3.0"))
 DRONE_ALTITUDE_M = float(os.getenv("DRONE_ALTITUDE_M", "30.0"))
 DB_PATH = PROJECT_ROOT / "data" / "demo.db"
+
+# Text-simulation demo. A separate file keeps this deterministic, model-free
+# demo away from demo.db, whose agent_costs / run_summaries / agent_traces rows
+# are the OpenAI cost ledger and must not be disturbed by a simulation.
+TEXT_DEMO_DB_PATH = PROJECT_ROOT / "data" / "text_demo.db"
+# A gap longer than this between sightings of one label starts a new visit,
+# which is how the two truck appearances become two logged appearances.
+TEXT_DEMO_VISIT_GAP_S = float(os.getenv("TEXT_DEMO_VISIT_GAP_S", "300.0"))

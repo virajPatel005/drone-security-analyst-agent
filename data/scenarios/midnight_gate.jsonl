@@ -1,0 +1,9 @@
+# Text-simulation scenario: the gate is empty right up to midnight.
+# The person is first SEEN at 00:00:00 so the unmodified person_at_night rule,
+# which checks the hour of a track's first_seen, can fire.
+{"date":"2026-11-23","time":"23:59:00","zone":"gate","description":"The main gate stands empty under the floodlight just before midnight.","objects":[]}
+{"date":"2026-11-23","time":"23:59:59","zone":"gate","description":"Nothing is at the main gate in the final second of the day.","objects":[]}
+{"date":"2026-11-24","time":"00:00:00","zone":"gate","description":"A person in a dark jacket is now standing at the main gate.","objects":[{"class":"person","label":"night-watcher","color":"dark","text":"person in a dark jacket standing at the main gate"}]}
+{"date":"2026-11-24","time":"00:01:00","zone":"gate","description":"The same person is still waiting by the main gate.","objects":[{"class":"person","label":"night-watcher","color":"dark","text":"same person still waiting at the gate"}]}
+{"date":"2026-11-24","time":"00:02:00","zone":"gate","description":"The person remains at the main gate, looking toward the driveway.","objects":[{"class":"person","label":"night-watcher","color":"dark","text":"person remains at the gate"}]}
+{"date":"2026-11-24","time":"00:03:00","zone":"gate","description":"After three minutes the person turns away from the main gate.","objects":[{"class":"person","label":"night-watcher","color":"dark","text":"person turning away from the gate"}]}
