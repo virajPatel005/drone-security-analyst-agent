@@ -9,7 +9,7 @@ Status key: [ ] todo, [~] in progress, [x] done. Update this file at the end of 
 - [x] Step 4: SQLite schema and indexing, queries by time and by object
 - [x] Step 5: Rule-based alerts
 - [x] Step 6: VLM on new-track crops via LM Studio, structured output, stored in the database
-- [ ] Step 7: OpenAI agent: summary, recommendations, follow-up Q&A over stored data
+- [x] Step 7: OpenAI agent: summary, recommendations, follow-up Q&A over stored data
 - [ ] Step 8: Tests (fakes for models), scenario tests for midnight alert and truck logged
 - [ ] Step 9: Streamlit UI for the demo
 - [ ] Step 10: Scalability measurements, VLM comparison table, diagrams

@@ -59,6 +59,9 @@ data/crops/
 # Assignment PDF
 *.pdf
 
+# Local backups (e.g. data/demo.db.bak from a database rebuild)
+*.bak
+
 # OS
 .DS_Store
 Thumbs.db

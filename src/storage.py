@@ -98,6 +98,36 @@ CREATE TABLE IF NOT EXISTS descriptions (
 
 -- Index so that "all descriptions for one run" is fast.
 CREATE INDEX IF NOT EXISTS idx_descriptions_run ON descriptions(run_id);
+
+-- Run summaries (one row per run, written once by the agent)
+CREATE TABLE IF NOT EXISTS run_summaries (
+    run_id          INTEGER PRIMARY KEY,
+    text            TEXT NOT NULL,
+    model_name      TEXT NOT NULL,
+    prompt_tokens   INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
+    created_time    TEXT NOT NULL
+);
+
+-- Index so that "summary for one run" is fast.
+CREATE INDEX IF NOT EXISTS idx_run_summaries_run ON run_summaries(run_id);
+
+-- Every OpenAI chat call is recorded here. The running cost total must live in
+-- SQLite, not in process memory, so a new command sees earlier spend.
+CREATE TABLE IF NOT EXISTS agent_costs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id              INTEGER,           -- NULL for non-run calls (e.g. model listing)
+    command             TEXT NOT NULL,     -- 'summary' | 'ask'
+    model_name          TEXT NOT NULL,
+    prompt_tokens       INTEGER NOT NULL,
+    completion_tokens   INTEGER NOT NULL,
+    estimated_cost_usd  REAL NOT NULL,
+    latency_s           REAL NOT NULL,
+    created_time        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_costs_created ON agent_costs(created_time);
 """
 
 _CREATE_RUN_SQL = """
@@ -753,3 +783,102 @@ def query_descriptions(
         }
         for r in rows
     ]
+
+def store_run_summary(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    text: str,
+    model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    estimated_cost_usd: float,
+) -> None:
+    """Store one run summary; INSERT OR REPLACE so it can be written once."""
+    cur = conn.execute(
+        """
+        INSERT OR REPLACE INTO run_summaries
+            (run_id, text, model_name, prompt_tokens, completion_tokens,
+             estimated_cost_usd, created_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            text,
+            model_name,
+            prompt_tokens,
+            completion_tokens,
+            estimated_cost_usd,
+            _iso(datetime.now(timezone.utc)),
+        ),
+    )
+    conn.commit()
+
+
+def query_run_summary(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+) -> dict[str, Any] | None:
+    """Return the stored summary for *run_id*, or ``None`` if none exists."""
+    row = conn.execute(
+        """
+        SELECT run_id, text, model_name, prompt_tokens, completion_tokens,
+               estimated_cost_usd, created_time
+        FROM run_summaries
+        WHERE run_id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "run_id": row[0],
+        "text": row[1],
+        "model_name": row[2],
+        "prompt_tokens": row[3],
+        "completion_tokens": row[4],
+        "estimated_cost_usd": row[5],
+        "created_time": row[6],
+    }
+
+
+def record_agent_call(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int | None,
+    command: str,
+    model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    estimated_cost_usd: float,
+    latency_s: float,
+) -> None:
+    """Append one OpenAI usage row; the sum of these rows is the cost guard state."""
+    conn.execute(
+        """
+        INSERT INTO agent_costs
+            (run_id, command, model_name, prompt_tokens, completion_tokens,
+             estimated_cost_usd, latency_s, created_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            command,
+            model_name,
+            prompt_tokens,
+            completion_tokens,
+            estimated_cost_usd,
+            latency_s,
+            _iso(datetime.now(timezone.utc)),
+        ),
+    )
+    conn.commit()
+
+
+def query_agent_cost_total(conn: sqlite3.Connection) -> float:
+    """Return the sum of all recorded OpenAI call costs, in USD."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM agent_costs"
+    ).fetchone()
+    return float(row[0])

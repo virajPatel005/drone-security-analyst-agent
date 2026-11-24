@@ -297,3 +297,46 @@ The VLM descriptions show that 4 of the 6 truck-class tracks are described as no
 
 ### Test count reconciliation
 - The earlier "13 new alert tests" claim was wrong: 13 was the then-total for `test_storage.py`, not the number added.
+
+## Step 7: OpenAI Agent (real runs, 24 Nov 2026)
+
+Key setup was checked with only the two allowed commands: `grep -c OPENAI_API_KEY .env` returned `1`, and the shell-variable/`.env` comparison returned `same`. No key, prefix or masked value was printed anywhere.
+
+Model listing through `OpenAIClient().list_model_names()` succeeded and printed model IDs only. The configured default `gpt-5.4-mini` is present in the list, so no substitute model was needed.
+
+Database state before the runs (read-only check, **no rebuild performed**): runs 1 and 2 present; alerts run 1 = 12 `vehicle_at_night` + 10 `loitering`, run 2 = 6 `heavy_vehicle_logged` + 5 `loitering`; descriptions run 1 = 33, run 2 = 23. There were already 2 real `agent_costs` rows ($0.016543) and 2 `run_summaries` rows from earlier real calls, so the running totals below include that earlier spend. Because cached summaries existed, both summaries were forced with `--force` to guarantee real model calls.
+
+Fake-client tests: `.venv/bin/python -m pytest -q` → `57 passed in 0.65s` (above the required 49; Step 6 had 49, `tests/test_agent.py` adds 8).
+
+Real commands, one at a time, all succeeded. Raw stats lines:
+
+| Command | model | prompt tokens | completion tokens | latency s | cost USD | running total USD |
+|---------|-------|---------------|-------------------|-----------|----------|-------------------|
+| `summary 1 --force` | gpt-5.4-mini | 3663 | 1698 | 5.721 | 0.010388 | 0.026932 |
+| `summary 2 --force` | gpt-5.4-mini | 3467 | 794 | 3.422 | 0.006173 | 0.033105 |
+| `ask 1 "Were any vehicles seen after midnight? Give times and track ids."` | gpt-5.4-mini | 3600 | 267 | 2.189 | 0.003902 | 0.037006 |
+| `ask 2 "Show all truck events and tell me whether they look reliable."` | gpt-5.4-mini | 3403 | 1451 | 4.877 | 0.009082 | 0.046088 |
+| `ask 2 "Which alerts look questionable and why?"` | gpt-5.4-mini | 3398 | 582 | 2.905 | 0.005168 | 0.051256 |
+| `ask 1 "What colour was the driver's jacket?"` | gpt-5.4-mini | 3594 | 7 | 1.242 | 0.002727 | 0.053983 |
+
+Final `agent_costs`: 8 rows, $0.053983 total, stored in SQLite (not memory). No warning ($0.50) or cap ($1.00) was reached.
+
+### Answer checks against data/demo.db
+
+- `ask 1` returned 12 vehicle-at-night events with track IDs 62, 67, 68, 70, 76, 79, 85, 87, 88, 96, 109, 110 and their timestamps. This matches `alerts` for run 1 exactly (12 rows) — no wrong or invented IDs.
+- `ask 2` listed truck tracks 2, 103, 326, 330, 360, 410 and "6 tracks / 33 events". The `tracks` and `events` tables confirm exactly those 6 truck tracks and 33 events. Descriptions were quoted accurately except track 410: the agent wrote "multi-story building" where the stored text says "brick building facade" — same meaning, not invented. Its reliability labels were cautious rather than wrong, but it called tracks 103 and 360 "somewhat reliable" despite non-truck descriptions (see below).
+- `ask 3` flagged tracks 103, 326, 410 and 2 as questionable `heavy_vehicle_logged` alerts, plus loitering tracks 47, 196 and 367 whose descriptions have status `too_small`. All IDs and quotes exist in the DB. It did **not** flag track 360 although its stored description ("A large, rectangular white object is visible on the ground") is also non-truck — an omission, not an invented claim. It also said "run not given" because the preloaded tool context contains no run ID; that is accurate.
+- `ask 4` answered exactly "the data cannot tell", as required.
+- Summary 1 reported "22 warning alerts" (= 12 vehicle_at_night + 10 loitering) and "no truck alerts stored" for run 1 — both true; its `questionable` IDs were 76 and 96. Summary 2 reported "six truck tracks" — true — and `questionable` IDs 103, 360, 410, omitting 326. Every track ID cited in both summaries (21 in run 1, 9 in run 2) was verified to exist in that run's `tracks` table: no invented IDs.
+- Expected VLM non-truck descriptions for 103, 326, 360 and 410 were confirmed directly from the `descriptions` table.
+
+### Failures and limits observed this step
+- No command failed in this final run. Earlier in the Step 7 repair, real summaries had been run against the wrong base URL (LM Studio) and contained invented track IDs; those are not the rows used here because both summaries were regenerated with `--force`.
+- The preloaded context for `ask`/`summary` does not include `run_id`, so the model cannot cite a run number in answers; this is a known presentation gap, not a data error.
+- The agent sometimes under-flags a questionable truck track (326 in summary 2, 360 in ask 3). This is model judgment, not a code failure; the underlying stored text is correct.
+
+### Additional Step 7 result notes
+1. Summary 2 flagged tracks 103, 360 and 410 as questionable and missed 326; ask question (c) ("Which alerts look questionable and why?") missed 360. Both are partial results, not data errors — the stored descriptions for all four tracks are correct in `data/demo.db`.
+2. One summary recommendation misreads simulated zone changes as "patrol or dwell behavior". Zone is the drone's telemetry location, not the object's position, so repeated `entered_zone` events do not show the object patrolling or dwelling.
+3. Answers do not cite the run ID because the preloaded tool context omits it. This is a context/presentation gap, not a database error.
+4. The summary is stored as JSON in `run_summaries.text`; the UI should render it (parse and display the `summary`, `notable_alerts`, `questionable` and `recommendations` fields) rather than printing the raw JSON string.
