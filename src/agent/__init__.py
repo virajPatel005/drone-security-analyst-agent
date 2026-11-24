@@ -610,18 +610,29 @@ _SUMMARY_SYSTEM = (
 
 _ASK_SYSTEM = (
     "You are an analyst for a drone security system.  Use only the stored text "
-    "returned by the tools.  Cite run and track IDs and timestamps.  Alerts "
-    "count tracks, not physical objects; ID switching can split one object into "
-    "several IDs; the clock is simulated; low-resolution aerial VLM descriptions "
-    "can be vague, so flag alerts whose description contradicts the class.  If "
-    "the stored data does not contain the requested detail, answer exactly "
-    "\"the data cannot tell\" rather than guessing."
+    "returned by the tools.  The preloaded digest is PARTIAL: it covers alerts, "
+    "truck-class tracks and their events, descriptions and event counts only.  "
+    "For any other track, or any detail not present in that digest, you MUST "
+    "call the matching read-only tool before answering.  Never answer "
+    "\"the data cannot tell\" without first trying the relevant tool.  Alerts "
+    "are not events and must not be listed as events.  Cite run and track IDs "
+    "and timestamps.  Alerts count tracks, not physical objects; ID switching "
+    "can split one object into several IDs; the clock is simulated; "
+    "low-resolution aerial VLM descriptions can be vague, so flag alerts whose "
+    "description contradicts the class.  Only when a relevant tool truly "
+    "returns no such detail, answer exactly \"the data cannot tell\" rather "
+    "than guessing."
 )
 
 _SUMMARY_USER_TEMPLATE = (
     "Build a compact digest for run {run_id}.\n\nStored data:\n{tool_results}"
 )
-_ASK_USER_TEMPLATE = "Question: {question}\n\nStored data:\n{tool_results}"
+_ASK_USER_TEMPLATE = (
+    "Run {run_id}. Question: {question}\n\n"
+    "Partial stored digest (not the whole database):\n{tool_results}\n\n"
+    "Name run {run_id} in your answer.  If the answer needs data outside this "
+    "digest, call the matching read-only tool before answering."
+)
 
 
 def cmd_summary(args: List[str]) -> int:
@@ -739,7 +750,9 @@ def cmd_ask(args: List[str]) -> int:
     conversation = run_conversation(
         client,
         system=_ASK_SYSTEM,
-        user=_ASK_USER_TEMPLATE.format(question=question, tool_results=tools_text),
+        user=_ASK_USER_TEMPLATE.format(
+            run_id=run_id, question=question, tool_results=tools_text
+        ),
         db=db,
         max_rounds=max_rounds,
     )

@@ -19,6 +19,7 @@ from src.storage import (
     query_agent_traces,
     query_alerts,
     query_events_in_time_window,
+    query_events_for_track,
     record_agent_call,
     store_description,
     store_run,
@@ -569,4 +570,115 @@ def test_scenario_traces_for_ask_and_cached_summary(
     assert key not in dump
     assert "Authorization" not in dump
     assert "Bearer" not in dump
+    db.close()
+
+
+def test_ask_system_prompt_states_partial_digest_and_must_call_tool() -> None:
+    system = agent._ASK_SYSTEM.lower()
+    for phrase in (
+        "partial",
+        "alerts, truck-class tracks and their events, descriptions and event counts only",
+        "must call the matching read-only tool",
+        "never answer \"the data cannot tell\" without first trying the relevant tool",
+        "alerts are not events",
+    ):
+        assert phrase in system, f"missing instruction: {phrase}"
+
+
+def test_ask_user_template_contains_run_id() -> None:
+    prompt = agent._ASK_USER_TEMPLATE.format(
+        run_id=7, question="why?", tool_results="DIGEST"
+    )
+    assert "Run 7" in prompt
+    assert "Name run 7 in your answer" in prompt
+    assert "Question: why?" in prompt
+    assert "DIGEST" in prompt
+
+
+def test_scenario_ask_tool_call_returns_real_events_and_trace_records_it(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    db_path = tmp_path / "tool_used.db"
+    db = init_db(db_path)
+    run_id = store_run(
+        db,
+        source_video="fake.mp4",
+        start_time=datetime(2026, 11, 24, 14, 0, 0),
+        tuning_settings={},
+    )
+    base = datetime(2026, 11, 24, 14, 0, 0)
+    event_specs = [
+        ("appeared", 0),
+        ("entered_zone", 0),
+        ("entered_zone", 3),
+        ("entered_zone", 6),
+        ("entered_zone", 9),
+        ("left", 10),
+        ("appeared", 12),
+        ("entered_zone", 12),
+        ("entered_zone", 15),
+        ("left", 15),
+    ]
+    store_tracks_and_events(
+        db,
+        run_id,
+        [
+            _scenario_event(kind, 47, "car", base + timedelta(seconds=offset))
+            for kind, offset in event_specs
+        ],
+    )
+    stored = query_events_for_track(db, run_id=run_id, track_id=47)
+    assert len(stored) == 10
+    db.close()
+
+    final = {"content": "Run 1: track 47 has 10 stored events.", "tool_calls": []}
+    created: list[ScriptedClient] = []
+
+    def fake_client_factory(**kwargs):
+        client = ScriptedClient(
+            [
+                {
+                    "content": "",
+                    "tool_calls": [
+                        _tool_call(
+                            "get_events_for_track",
+                            '{"run_id": 1, "track_id": 47}',
+                            "ev_47",
+                        )
+                    ],
+                },
+                final,
+            ],
+            default=final,
+        )
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(agent, "OpenAIClient", fake_client_factory)
+    monkeypatch.setattr(agent, "DB_PATH", db_path)
+
+    assert (
+        agent.cmd_ask(
+            ["1", "List every event for track 47, with timestamps and types."]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    tool_message = [
+        m for m in created[0].calls[1]["messages"] if m.get("role") == "tool"
+    ][0]
+    for event in stored:
+        assert event.event_type in tool_message["content"]
+        assert event.timestamp in tool_message["content"]
+
+    db = init_db(db_path)
+    traces = query_agent_traces(db, run_id=1)
+    assert len(traces) == 1
+    assert [call["name"] for call in traces[0]["tool_calls"]] == [
+        "get_events_for_track"
+    ]
+    assert traces[0]["question"] == (
+        "List every event for track 47, with timestamps and types."
+    )
     db.close()
