@@ -1,0 +1,25 @@
+flowchart TB
+    subgraph PERCEPTION["1. Perception (local, GPU)"]
+        V["Sampled video frames"] --> S["Frame sampler<br/>seek + decode"]
+        S --> Y["YOLO11s + ByteTrack"]
+        Y --> O["Observations<br/>class, box, track ID"]
+    end
+
+    subgraph DESCRIPTION["2. Description (local VLM)"]
+        O --> C["One crop per NEW track"]
+        C --> L["LM Studio Gemma<br/>stateless, 1 call/track"]
+        L --> T["Text description"]
+    end
+
+    subgraph STORAGE["Storage (SQLite, text only)"]
+        DB[("runs, tracks, events,<br/>frames, frame_objects,<br/>alerts, descriptions,<br/>agent tables")]
+    end
+
+    subgraph REASONING["3. Reasoning (cloud, text only)"]
+        DB --> A["OpenAI mini model<br/>summary + follow-up Q&A"]
+        A --> ANS["Answer from stored text"]
+    end
+
+    O --> DB
+    T --> DB
+    Y --> DB

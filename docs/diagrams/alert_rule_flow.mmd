@@ -1,0 +1,14 @@
+flowchart TD
+    A["Stored tracks + events"] --> B["vehicle_at_night:<br/>first-seen hour in night window?"]
+    A --> C["person_at_night:<br/>person first-seen hour in night window?"]
+    A --> D["loitering:<br/>last_seen - first_seen > 5 s?"]
+    A --> E["heavy_vehicle_logged:<br/>class is truck or bus?"]
+
+    B -->|yes| W["warning alert"]
+    C -->|yes| W
+    D -->|yes| W
+    E -->|yes| I["info alert"]
+
+    W --> U["UNIQUE(run_id, track_id, rule_name)<br/>= one alert per track per rule"]
+    I --> U
+    U --> DB[("alerts table")]

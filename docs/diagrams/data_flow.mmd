@@ -1,0 +1,14 @@
+flowchart LR
+    V["Video + simulated<br/>clock / telemetry"] --> F["Sampled frames"]
+    F --> Y["YOLO + ByteTrack"]
+    Y --> E["Events: appeared,<br/>entered_zone, left"]
+    Y --> IX["Frame index:<br/>frames + frame_objects"]
+    E --> DB[("SQLite")]
+    IX --> DB
+    DB --> RULES["Rule engine"]
+    RULES --> AL["Alerts"]
+    AL --> DB
+    DB --> AG["Agent: summary / ask<br/>stored text only"]
+    AG --> OUT["Answer + cost row"]
+    OUT --> DB
+    DB --> UI["Streamlit UI (read-only)"]

@@ -1,0 +1,82 @@
+erDiagram
+    RUNS ||--o{ TRACKS : "has"
+    RUNS ||--o{ EVENTS : "has"
+    RUNS ||--o{ FRAMES : "indexes"
+    FRAMES ||--o{ FRAME_OBJECTS : "contains"
+    RUNS ||--o{ ALERTS : "raises"
+    RUNS ||--o{ DESCRIPTIONS : "describes"
+    RUNS ||--o| RUN_SUMMARIES : "has"
+    RUNS ||--o{ AGENT_COSTS : "bills"
+    RUNS ||--o{ AGENT_TRACES : "audits"
+
+    RUNS {
+        int id PK
+        text source_video
+        text start_time
+        text tuning_settings
+    }
+    TRACKS {
+        int run_id PK
+        int track_id PK
+        text class_name
+        text first_seen
+        text last_seen
+    }
+    EVENTS {
+        int id PK
+        int run_id
+        int track_id
+        text event_type
+        text timestamp
+        text zone
+    }
+    FRAMES {
+        int run_id PK
+        int frame_index PK
+        text timestamp
+        text zone
+        int detection_count
+    }
+    FRAME_OBJECTS {
+        int id PK
+        int run_id
+        int frame_index
+        int track_id
+        text class_name
+        real confidence
+    }
+    ALERTS {
+        int id PK
+        int run_id
+        int track_id
+        text rule_name
+        text severity
+    }
+    DESCRIPTIONS {
+        int id PK
+        int run_id
+        int track_id
+        text status
+        text description
+        real latency_ms
+    }
+    RUN_SUMMARIES {
+        int run_id PK
+        text summary_json
+        int prompt_tokens
+        int completion_tokens
+    }
+    AGENT_COSTS {
+        int id PK
+        int run_id
+        text command
+        real estimated_cost_usd
+        real latency_s
+    }
+    AGENT_TRACES {
+        int id PK
+        int run_id
+        text mode
+        text answer
+        real estimated_cost_usd
+    }

@@ -1,0 +1,13 @@
+flowchart LR
+    J["JSONL scenario<br/>hand-written frames"] --> P["Parser:<br/>validate time, class, order"]
+    P --> R["FrameRecord<br/>description filled, image = None"]
+    R --> B["Frame index rows"]
+    R --> T["Tracks + events<br/>from stable labels"]
+    B --> DB[("data/text_demo.db")]
+    T --> DB
+    DB --> RULES["SAME 4 alert rules<br/>read stored rows"]
+    RULES --> DB
+    DB --> Q["query_frames:<br/>time / class / track"]
+
+    N["No YOLO, VLM or OpenAI call"]:::note
+    classDef note fill:#f6f6f6,stroke:#888,stroke-dasharray: 4 3;

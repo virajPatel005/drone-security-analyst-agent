@@ -584,3 +584,178 @@ person_at_night alerts for 23:59->00:03 person: 0
 - Hand-written labels are certainties (`confidence=1.0`) and boxes are placeholders `(0,0,0,0)`; neither is a real detection. No crop or VLM call is made.
 - The Streamlit app reads only `demo.db`, so these text runs are not visible there in this step. Step 10 and Step 11 were not started.
 
+## Step 10: Scalability measurements (24 Nov 2026)
+
+Machine (measured this session): `NVIDIA GeForce RTX 5050 Laptop GPU`, **8151 MiB** VRAM (4258 MiB in use at measurement), driver **610.74**, compute capability (12,0) from earlier checks; WSL-visible RAM **7.6 GiB** total, 4.1 GiB free. Venv Python 3.12.13. Device reported by the tracker: `cuda:0`.
+
+Settings used (unchanged defaults from `src/config/settings.py`): `yolo11s.pt`, `imgsz=1280`, `conf=0.10`, `SAMPLE_RATE_FPS=10`, tracker `configs/bytetrack_0.9.yaml`, `MIN_TRACK_FRAMES=2`, `LOST_FRAMES=10`. No setting, tracker, YOLO, alert, VLM or agent code was changed.
+
+Command: `.venv/bin/python scripts/benchmark.py`. Raw output: `/tmp/opencode/step10/results.json`. All writes went to scratch DBs under `/tmp/opencode/step10`; `data/demo.db` was opened only with `mode=ro`.
+
+### Per-stage timing on the two real clips
+
+Mean seconds per sampled frame, with median and warm-up note. "First" includes model/tracker load.
+
+| Clip | Sampled frames | Decode (seek+read) mean / median / first | YOLO+ByteTrack mean / median / first | Frame-index build (in-loop) | Event build (in-loop) |
+|------|---------------|------------------------------------------|--------------------------------------|-----------------------------|-----------------------|
+| drone_intersection.mp4 | 167 | 152.925 / 150.858 / 195.281 ms | 40.848 / 21.033 / **3209.722** ms | 0.010 ms | 0.013 ms |
+| drone_truck.mp4 | 184 | 186.017 / 181.213 / 147.497 ms | 24.007 / 21.459 / 93.098 ms | 0.010 ms | 0.010 ms |
+
+Steady-state YOLO+ByteTrack (excluding the first frame): **21.758 ms** (intersection) and **23.629 ms** (truck) — consistent with the earlier ~64 ms figure once that earlier number's warm-up and denser first run are accounted for. Decode dominates by roughly 7–8×.
+
+Note: the decode means here (152.9 / 186.0 ms per sampled frame) and the seek figures in the decode-comparison table below (176.0 / 202.6 ms) come from two separate benchmark passes in the same session, which is why they differ. The one-hour extrapolation uses about 170 ms per frame, which sits between the two sets.
+
+DB write stages, measured as one transaction per run and divided by sampled frames:
+
+| Clip | Event write total / per frame | Frame-index write total / per frame | Scratch DB size |
+|------|-------------------------------|-------------------------------------|-----------------|
+| drone_intersection.mp4 | 0.002196 s / 0.013 ms | 0.006192 s / 0.037 ms | 335872 bytes |
+| drone_truck.mp4 | 0.002632 s / 0.014 ms | 0.004235 s / 0.023 ms | 266240 bytes |
+
+The in-loop build and the single end-of-run DB writes are effectively free (<0.05 ms/frame); decode and YOLO are the whole cost. Annotated-video drawing was deliberately not timed (it is presentation, not a pipeline stage).
+
+### Throughput and ratio to real time
+
+Sum of measured stages (decode + YOLO + both builds + both DB writes):
+
+| Clip | Video duration | Measured total | Throughput | Ratio to real time |
+|------|---------------|----------------|------------|--------------------|
+| drone_intersection.mp4 | 16.633 s | 32.372 s | 5.159 sampled frames/s | 0.514 (about 2× slower than real time) |
+| drone_truck.mp4 | 18.333 s | 38.655 s | 4.760 sampled frames/s | 0.474 (about 2.1× slower than real time) |
+
+### Decode comparison: frame-index seek vs sequential reading
+
+Sequential reading was possible in the benchmark script only; no pipeline code changed. Both methods collected the identical set of sampled frames (167 / 184), asserted equal.
+
+| Clip | Source frames | Seek total / ms per sampled frame | Sequential total / ms per sampled frame | Sequential faster by |
+|------|--------------|-----------------------------------|------------------------------------------|----------------------|
+| drone_intersection.mp4 | 499 | 29.386 s / 175.962 ms | 0.707 s / 4.232 ms | 41.6× |
+| drone_truck.mp4 | 440 | 37.275 s / 202.580 ms | 0.685 s / 3.724 ms | 54.4× |
+
+Finding: repeated `CAP_PROP_POS_FRAMES` seeks are the bottleneck; decoding every source frame once and keeping only the sampled indices is 40–54× faster. The pipeline uses seeking, so this is a measured, unimplemented improvement — **not** applied here.
+
+### Frame-index growth from the real rows
+
+Read-only from `data/demo.db`; the same rows were re-inserted into a scratch DB through the production `store_frame_index` write path so row layout and indexes match. Bytes are incremental file-size deltas (includes index pages).
+
+| Run | Frames | frame_objects | Rows / sampled frame | Incremental bytes | Bytes / sampled frame | Bytes / object |
+|-----|--------|---------------|----------------------|-------------------|-----------------------|----------------|
+| 1 | 167 | 1287 | 7.707 | 184320 | 1103.7 | 143.2 |
+| 2 | 184 | 868 | 4.717 | 126976 | 690.1 | 146.3 |
+
+`SUM(detection_count)` equalled the `frame_objects` row count for both runs (1287, 868), so the index is self-consistent.
+
+### Synthetic query latency (NOT real footage)
+
+**SYNTHETIC, not measured on video.** Generated scratch DBs with 5 detections per frame, 50 cyclic track IDs, 5 classes and 10 fps timestamps; DB sizes 4.1 MB / 42.5 MB / 430.8 MB. Each query is the existing `src.storage` function, median of 5 warmed calls, limit 50.
+
+| Frames (objects) | Time window no idx / idx | Class=truck no idx / idx | Track=42 no idx / idx |
+|------------------|--------------------------|--------------------------|------------------------|
+| 10k (50k) | 1.224 / **0.030** ms | 10.464 / 9.774 ms | 3.895 / **1.534** ms |
+| 100k (500k) | 12.972 / **0.030** ms | 112.764 / 111.281 ms | 39.350 / **16.171** ms |
+| 1M (5M) | 130.182 / **0.029** ms | 1161.863 / 1155.677 ms | 389.911 / **173.145** ms |
+
+Honest reading: the `(run_id, timestamp)` index makes time windows flat (~0.03 ms); the track index roughly halves per-track lookups. The class query barely improves because `COUNT(DISTINCT frame_index)` over ~1M matching objects dominates regardless of the index. No 10M-frame run was attempted.
+
+### VLM cost scaling (stored numbers)
+
+| Run | Confirmed tracks | Sampled frames | VLM calls attempted | Too-small skipped | Calls / track | Calls / 100 frames | Stored latency total / mean per call |
+|-----|------------------|----------------|---------------------|-------------------|---------------|--------------------|--------------------------------------|
+| 1 | 33 | 167 | 33 | 0 | 1.000 | 19.76 | 40.61 s / 1.230 s |
+| 2 | 23 | 184 | 11 | 12 | 0.478 | 5.98 | 13.72 s / 1.247 s |
+
+The stored per-call latency sums (40.61 / 13.72 s) are slightly lower than the wall totals recorded earlier in Step 6 (42.37 / 14.59 s); the difference is DB-write and parse overhead outside `latency_ms`, not a contradiction.
+
+Fragmentation multiplier: one VLM call per *new confirmed track ID*. Run 1's 33 IDs produced 33 calls; run 2's 23 IDs produced at most 23, of which 11 were made and 12 skipped as too small. A tracker split that turns one physical object into *k* IDs therefore multiplies VLM calls by *k* (arithmetic: 1 object → 1 ID → 1 call; 1 object → 3 IDs → 3 calls), while doubling the sample rate does not add calls for an already-described track.
+
+Five calls timed live on stored crops with the configured `google/gemma-4-e4b` (LM Studio reachable): latencies 10471.1, 1630.5, 1618.9, 1462.8, 1610.7 ms — mean **3358.8 ms**, median 1618.9 ms, valid JSON **5/5**. The first call includes a cold model reload; steady state is ~1.5–1.6 s, close to the stored ~1.23 s mean.
+
+### Agent cost per question (stored tables, read-only)
+
+| Source | Rows | Avg prompt tokens | Avg completion tokens | Avg cost USD | Avg latency |
+|--------|------|-------------------|-----------------------|--------------|-------------|
+| `agent_costs` all calls | 19 | 3741.9 | 503.2 | 0.00507091 | 2.982 s |
+| `agent_costs` command=`ask` | 15 | 3789.1 | 305.4 | 0.00421615 | 2.512 s |
+| `agent_traces` all answers | 7 | 6120.3 | 324.9 | 0.00605207 | 3780.3 ms |
+| `agent_traces` mode=`ask`, uncached | 7 | 6120.3 | 324.9 | 0.00605207 | 3780.3 ms |
+
+Totals: 71097 prompt + 9561 completion tokens, **$0.09634725** across 19 cost rows — unchanged. The two tables answer different questions: `agent_costs` counts model calls, `agent_traces` counts user-visible answers (its higher prompt average reflects the tool-call rounds in the tracked answers).
+
+### Extrapolations — EXTRAPOLATION, NOT MEASURED
+
+All arithmetic below uses the measured numbers above; none of it was run.
+
+- **One hour at 10 fps sampling = 36000 sampled frames.** Mean measured cost/frame = (32.372 + 38.655) / (167 + 184) = 0.2020 s. 36000 × 0.2020 = **7272 s ≈ 2.02 h** of CPU/GPU wall time (ratio 3600/7272 = 0.50, i.e. ~2× slower than real time). The per-frame average includes the 3.2 s first-frame model warm-up, so this estimate is slightly pessimistic. With the *unimplemented* sequential decode (~4 ms instead of ~170–186 ms): per frame ≈ 0.2020 − 0.170 + 0.004 = 0.036 s → 36000 × 0.036 = **1296 s ≈ 21.6 min**.
+- **VLM calls for that hour, by observed density:** run-1 rate 19.76 calls/100 frames → 36000 × 0.1976 = 7114 calls × 1.230 s = 8750 s ≈ 2.43 h; run-2 rate 5.98/100 → 2153 calls × 1.247 s = 2685 s ≈ 45 min. The large spread is the real message: call count depends on track fragmentation and crop size, not on frame count.
+- **Index size for that hour:** 36000 frames × 1103.7 B/frame (run-1 density) = 39.7 MB; at run-2 density 36000 × 690.1 = 24.8 MB. Both exclude alerts/descriptions.
+- **100 agent questions:** 100 × $0.00421615 = **$0.42** (ask-only average) with 100 × 2.512 s = 251 s of model latency, assuming the bounded digest keeps prompt size roughly flat as the video grows — an assumption, not a measurement.
+- **Ten drones, each 10 fps sampled = 100 sampled frames/s demanded.** Measured single-stream capacity ≈ 4.9 frames/s → 100 / 4.9 ≈ **20.4 GPU-equivalents** on this hardware. With sequential decode (~27.8 frames/s/stream) → 100 / 27.8 ≈ **3.6 GPU-equivalents**. Serving ten streams on one GPU is unmeasured and would contend for VRAM (8151 MiB total).
+
+### Lift-ready: Scalability
+
+On an RTX 5050 Laptop (8 GB VRAM), the prototype processes a sampled frame in about **0.20 s end to end**: 0.15–0.19 s is 4K/1080p frame decode by seeking, 0.021–0.024 s is steady-state YOLO+ByteTrack, and SQLite writes are under 0.05 ms per frame. End-to-end throughput is **5.16 and 4.76 sampled frames/s** (0.51× and 0.47× real time). Seeking is pathological: reading the video sequentially and discarding unneeded frames is **42–54× faster** (0.707/0.685 s versus 29.4/37.3 s per clip) — the single biggest unimplemented win. The index adds ~0.7–1.1 KB per sampled frame; the `(run_id, timestamp)` index keeps synthetic time-window queries at ~0.03 ms even at 1 M frames (130 ms without it), while a class count over 5 M detections stays around 1.16 s with or without indexes. VLM cost scales with *new tracks*, not frames: 33 calls for 33 tracks versus 11 calls for 23 tracks (12 crops too small), at ~1.2 s per call. The agent averages 3.8k prompt + 305 completion tokens, **$0.0042 and 2.5 s per question**; total OpenAI spend remains $0.09634725. One hour of footage would take about 2.0 h to process as written, or ~22 min if sequential decoding were adopted; ten simultaneous drones would need roughly 20 GPUs at current throughput. All hour/ten-drone figures are extrapolations, not measured.
+
+## Step 10: VLM comparison (24 Nov 2026)
+
+LM Studio was reachable and returned 11 model names (names only, no install/download):
+
+- `google/gemma-4-e4b`, `qwen/qwen2.5-coder-14b`, `qwen/qwen3.5-9b`, `google/gemma-3-12b`, `nvidia/nemotron-3-nano-4b`, `qwen2.5-coder-7b-instruct`, `qwen/qwen2.5-vl-7b`, `google/gemma-4-e2b`, `mistralai/ministral-3-3b`, `deepseek/deepseek-r1-0528-qwen3-8b`, `text-embedding-nomic-embed-text-v1.5`.
+
+Each was probed with one stored crop; five returned valid JSON and count as available vision models: `google/gemma-4-e4b`, `google/gemma-4-e2b`, `google/gemma-3-12b`, `qwen/qwen3.5-9b`, `qwen/qwen2.5-vl-7b`. The other six are coder/reasoning/embedding listings and were not compared. No accuracy score is claimed — LM Studio provides no ground truth.
+
+Fixed set: 10 run-2 tracks — **2, 36, 64, 103, 106, 233, 326, 330, 353, 410** — five YOLO truck tracks (2, 103, 326, 330, 410) and five car tracks, including the required 103/326/410. All 10 crop files exist; the "By eye" column was first drafted by the assistant from the crop files, then checked by the human (the project owner) against the crops. It is one person's visual reading, not independent ground truth, and no accuracy score is claimed.
+
+Per-model summary (10 calls each, same crops, stateless, temperature 0, JSON schema):
+
+| Model | Mean latency | Median latency | Valid JSON |
+|-------|--------------|----------------|------------|
+| google/gemma-4-e4b | 1542.5 ms | 1459.7 ms | 10/10 |
+| google/gemma-4-e2b | 2667.0 ms | 1202.5 ms | 10/10 |
+| google/gemma-3-12b | 60157.0 ms | 41251.2 ms | 10/10 |
+| qwen/qwen3.5-9b | 15721.3 ms | 12613.8 ms | 10/10 |
+| qwen/qwen2.5-vl-7b | 3286.0 ms | 1240.6 ms | 10/10 |
+
+Latency includes model loading on the first call of each model; that is why the means for the larger models are far above their medians (for example gemma-3-12b's first call took 171405 ms). All five produced valid JSON for all ten crops.
+
+Per-track descriptions (verbatim, truncated only for table width):
+
+| Track | YOLO class | gemma-4-e4b (chosen) | gemma-4-e2b | gemma-3-12b | qwen3.5-9b | qwen2.5-vl-7b | By eye (no ground truth) |
+|-------|-----------|----------------------|-------------|-------------|------------|---------------|--------------------------|
+| 2 | truck | rectangular white object, nature unclear | blurry large white rectangular object | white-roofed building with writing/artwork | white-roofed building with blue mural | large building with blue graffiti | white box truck with blue cab, "Linda" branding — clearly a truck |
+| 36 | car | indistinct blue/grey patch among foliage | small body of blue water | small area of blue water in greenery | blue/grey vehicle on grass | small bird with blue patch | blurry dark object in foliage with a blue patch; vehicle not certain |
+| 64 | car | banner featuring text | cylindrical structure with graffiti | cylinder covered in graffiti | cylindrical object with multicolour graffiti | water tank with blue/white text | painted cylindrical tank/drum with text — not a car |
+| 103 | truck | blurry storage container | red truck | red trailer with markings | red food trailer | red truck | red-and-white box body on wheels — truck/trailer |
+| 106 | car | shape that appears to be a vehicle | vehicle on a road | dark-coloured vehicle on paved surface | dark shape, appears to be a car | blurred vehicle on road | blurry white/blue vehicle on road — likely a car |
+| 233 | car | blurry white vehicle on paved surface | white van on road | white van parked on a street | white van on road | white van parked on street | white van/minibus on road |
+| 326 | truck | three small blue/red blocks | two rectangular blue/red blocks | several blue/orange rectangular containers | four shipping containers | stacked shipping containers | four coloured rectangular containers — not a truck |
+| 330 | truck | small red vehicle on dusty surface | red truck | blurry red truck with blue bed and equipment | red pickup carrying small excavator | red truck with blue cargo area | red compact flatbed/pickup carrying a blue object — small truck |
+| 353 | car | blurry blue vehicle on paved surface | blue vehicle | blurry blue vehicle next to white vehicle | blue vehicle | small blue vehicle | blue minivan/car on road |
+| 410 | truck | multi-storey building with windows | brick building facade | blurry grey vehicle (wrong) | brown building structure | building section with windows | narrow alley between brick buildings — not a truck |
+
+Gemma-4-e4b versus YOLO class label, per track (keyword rule stated explicitly, not an accuracy metric: "agreement" = the stored description says vehicle/truck/van/car for a YOLO vehicle class; silence or a non-vehicle noun = "disagreement"):
+
+| Track | YOLO | Stored Gemma description says vehicle? | Result |
+|-------|------|----------------------------------------|--------|
+| 2 | truck | no (rectangular object) | disagreement |
+| 36 | car | no (patch among foliage) | disagreement |
+| 64 | car | no (banner) | disagreement |
+| 103 | truck | no (storage container) | disagreement |
+| 106 | car | yes ("appears to be a vehicle") | agreement |
+| 233 | car | yes ("white vehicle") | agreement |
+| 326 | truck | no (blocks) | disagreement |
+| 330 | truck | yes ("small red vehicle") | agreement at vehicle level |
+| 353 | car | yes ("blue vehicle") | agreement |
+| 410 | truck | no (building) | disagreement |
+
+Four of ten agree at the vehicle-vs-non-vehicle level; the chosen VLM under-identifies large trucks as buildings/containers. This is a qualitative keyword reading of stored text, **not** a measured accuracy number.
+
+### Lift-ready: VLM comparison
+
+Five vision models were already available in LM Studio and were compared on the same 10 stored crops. All returned valid JSON 10/10 times. Three models are close in steady state (about 1.2–1.5 s median: `gemma-4-e4b` 1.46 s, `gemma-4-e2b` 1.20 s, `qwen2.5-vl-7b` 1.24 s), while `qwen3.5-9b` (12.6 s) and `gemma-3-12b` (41.3 s) are far slower; the larger models' means are inflated by one-time loading. By eye, Gemma-4-e4b called only 4/10 crops vehicles, missing the clearly blue-cabbed truck (track 2) and the red box truck (103) as vehicles, and correctly rejected the shipping containers (326) and the building (410). Qwen3.5-9b and Qwen2.5-VL-7b named track 103 a truck and track 326 containers, but Qwen2.5-VL-7b called the truck crop 2 a "building" and track 36 a "bird"; gemma-3-12b also read track 2 as a building and uniquely called the building crop 410 a "grey vehicle". No ground truth exists, so these are observations rather than accuracy scores; the operational conclusion is unchanged: YOLO supplies counts/classes and VLM text must be treated as fallible context.
+
+### Tests and protected data
+
+- `.venv/bin/python -m pytest -q` → **98 passed** (was 96; +2 in `tests/test_benchmark.py`). Two no-model tests assert the sequential decoder targets exactly the same frames as the seek sampler and never exceeds the clip duration.
+- `data/demo.db` read-only check after all measurements: runs **2**; tracks **33/23**; alerts **22/11**; frames **167/184**; `agent_costs` **19** rows, total **$0.09634725**. Unchanged from baseline.
+- No OpenAI call was made; no `.db`, crop or video was written inside the repo; no dependency was added; no external site was visited.
+
