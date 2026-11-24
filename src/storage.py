@@ -128,6 +128,27 @@ CREATE TABLE IF NOT EXISTS agent_costs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_costs_created ON agent_costs(created_time);
+
+-- One row per user-visible agent answer, including cached summaries. This is a
+-- separate audit record from agent_costs: cost rows count model calls, trace
+-- rows record what the user actually saw and which tools produced it.
+CREATE TABLE IF NOT EXISTS agent_traces (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id              INTEGER NOT NULL,
+    mode                TEXT NOT NULL,     -- 'summary' | 'ask'
+    question            TEXT,              -- NULL for summary
+    tool_calls          TEXT NOT NULL,     -- JSON list: {name, arguments, result_size}
+    answer              TEXT NOT NULL,     -- final answer text exactly as shown to the user
+    model_name          TEXT NOT NULL,
+    prompt_tokens       INTEGER NOT NULL,
+    completion_tokens   INTEGER NOT NULL,
+    estimated_cost_usd  REAL NOT NULL,
+    latency_ms          REAL NOT NULL,
+    cached              INTEGER NOT NULL DEFAULT 0,
+    created_time        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_traces_run ON agent_traces(run_id);
 """
 
 _CREATE_RUN_SQL = """
@@ -882,3 +903,95 @@ def query_agent_cost_total(conn: sqlite3.Connection) -> float:
         "SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM agent_costs"
     ).fetchone()
     return float(row[0])
+
+
+# ---------------------------------------------------------------------------
+# Agent trace storage — one row per answer the user actually sees
+# ---------------------------------------------------------------------------
+
+
+def record_agent_trace(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    mode: str,
+    question: str | None,
+    tool_calls: list[dict[str, Any]],
+    answer: str,
+    model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    estimated_cost_usd: float,
+    latency_ms: float,
+    cached: bool = False,
+) -> int:
+    """Append one trace row and commit inside this function.
+
+    Only explicitly named text is stored: the tool call name/arguments/size,
+    the answer text, and usage numbers.  No request headers or credentials are
+    ever passed in here, so they cannot reach the database.
+    """
+    cur = conn.execute(
+        """
+        INSERT INTO agent_traces (
+            run_id, mode, question, tool_calls, answer, model_name,
+            prompt_tokens, completion_tokens, estimated_cost_usd,
+            latency_ms, cached, created_time
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            mode,
+            question,
+            json.dumps(tool_calls, sort_keys=True),
+            answer,
+            model_name,
+            prompt_tokens,
+            completion_tokens,
+            estimated_cost_usd,
+            latency_ms,
+            1 if cached else 0,
+            _iso(datetime.now(timezone.utc)),
+        ),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def query_agent_traces(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+) -> list[dict[str, Any]]:
+    """Return all traces for *run_id*, oldest first, with tool_calls parsed."""
+    rows = conn.execute(
+        """
+        SELECT id, run_id, mode, question, tool_calls, answer, model_name,
+               prompt_tokens, completion_tokens, estimated_cost_usd,
+               latency_ms, cached, created_time
+        FROM agent_traces
+        WHERE run_id = ?
+        ORDER BY id ASC
+        """,
+        (run_id,),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        result.append(
+            {
+                "id": r[0],
+                "run_id": r[1],
+                "mode": r[2],
+                "question": r[3],
+                "tool_calls": json.loads(r[4]) if r[4] else [],
+                "answer": r[5],
+                "model_name": r[6],
+                "prompt_tokens": r[7],
+                "completion_tokens": r[8],
+                "estimated_cost_usd": r[9],
+                "latency_ms": r[10],
+                "cached": bool(r[11]),
+                "created_time": r[12],
+            }
+        )
+    return result

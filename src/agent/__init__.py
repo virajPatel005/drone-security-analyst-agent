@@ -41,6 +41,7 @@ from src.config.settings import (
 from src.storage import (
     init_db,
     query_agent_cost_total,
+    query_agent_traces,
     query_alerts,
     query_counts_by_event_type,
     query_descriptions,
@@ -48,6 +49,7 @@ from src.storage import (
     query_run_summary,
     query_tracks_by_class,
     record_agent_call,
+    record_agent_trace,
     store_run_summary,
 )
 
@@ -514,6 +516,10 @@ def run_conversation(
         "model": getattr(client, "model", OPENAI_MODEL_NAME),
     }
     final_text = ""
+    # Plain description of each tool the model chose, for the trace table.  We
+    # keep the result *size*, not the result text: the full result already went
+    # back into the conversation and duplicating it here would bloat storage.
+    trace_calls: List[Dict[str, Any]] = []
     for _ in range(rounds):
         result = client.call(
             messages=messages,
@@ -548,6 +554,13 @@ def run_conversation(
             messages.append(assistant_message)
             for call in tool_calls:
                 tool_result = _run_tool(call["name"], _parse_arguments(call["arguments"]), db)
+                trace_calls.append(
+                    {
+                        "name": call["name"],
+                        "arguments": call["arguments"],
+                        "result_size": len(tool_result),
+                    }
+                )
                 messages.append(
                     {
                         "role": "tool",
@@ -565,7 +578,7 @@ def run_conversation(
         suffix = f"Stopped after {rounds} rounds without a final answer."
         final_text = f"{final_text}\n{suffix}" if final_text else suffix
 
-    return {"content": final_text, "stats": stats}
+    return {"content": final_text, "stats": stats, "tool_calls": trace_calls}
 
 
 def _print_stats(stats: dict) -> None:
@@ -639,6 +652,22 @@ def cmd_summary(args: List[str]) -> int:
                 "running_total_usd": query_agent_cost_total(db),
             }
         )
+        # A cached answer still needs an audit row, but it made no new model
+        # call, so its usage is recorded as zero and explicitly marked cached.
+        record_agent_trace(
+            db,
+            run_id=run_id,
+            mode="summary",
+            question=None,
+            tool_calls=[],
+            answer=cached["text"],
+            model_name=cached["model_name"],
+            prompt_tokens=0,
+            completion_tokens=0,
+            estimated_cost_usd=0.0,
+            latency_ms=0.0,
+            cached=True,
+        )
         db.close()
         return 0
 
@@ -663,6 +692,19 @@ def cmd_summary(args: List[str]) -> int:
     print("Summary (OpenAI, tools auto):")
     print(conversation["content"])
     _print_stats(stats)
+    record_agent_trace(
+        db,
+        run_id=run_id,
+        mode="summary",
+        question=None,
+        tool_calls=conversation["tool_calls"],
+        answer=conversation["content"],
+        model_name=stats["model"],
+        prompt_tokens=stats["prompt_tokens"],
+        completion_tokens=stats["completion_tokens"],
+        estimated_cost_usd=stats["cost_usd"],
+        latency_ms=stats["latency_s"] * 1000.0,
+    )
     db.close()
     return 0
 
@@ -703,5 +745,42 @@ def cmd_ask(args: List[str]) -> int:
     )
     print(conversation["content"])
     _print_stats(conversation["stats"])
+    record_agent_trace(
+        db,
+        run_id=run_id,
+        mode="ask",
+        question=question,
+        tool_calls=conversation["tool_calls"],
+        answer=conversation["content"],
+        model_name=conversation["stats"]["model"],
+        prompt_tokens=conversation["stats"]["prompt_tokens"],
+        completion_tokens=conversation["stats"]["completion_tokens"],
+        estimated_cost_usd=conversation["stats"]["cost_usd"],
+        latency_ms=conversation["stats"]["latency_s"] * 1000.0,
+    )
+    db.close()
+    return 0
+
+
+def cmd_traces(args: List[str]) -> int:
+    """CLI: traces <run-id> — list stored answer traces for one run."""
+    if len(args) < 1:
+        print("Usage: ask_agent.py traces <run-id>", file=sys.stderr)
+        return 1
+    try:
+        run_id = int(args[0])
+    except ValueError:
+        print("Run id must be an integer", file=sys.stderr)
+        return 1
+
+    db = init_db(DB_PATH)
+    for row in query_agent_traces(db, run_id=run_id):
+        tools = ", ".join(call["name"] for call in row["tool_calls"]) or "none"
+        question = row["question"] if row["question"] is not None else "-"
+        print(
+            f"trace {row['id']} time={row['created_time']} mode={row['mode']} "
+            f"cached={int(row['cached'])} question={question!r} tools=[{tools}] "
+            f"cost_usd={row['estimated_cost_usd']:.6f}"
+        )
     db.close()
     return 0

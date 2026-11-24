@@ -10,7 +10,7 @@ Status key: [ ] todo, [~] in progress, [x] done. Update this file at the end of 
 - [x] Step 5: Rule-based alerts
 - [x] Step 6: VLM on new-track crops via LM Studio, structured output, stored in the database
 - [x] Step 7: OpenAI agent: summary, recommendations, follow-up Q&A over stored data
-- [ ] Step 8: Tests (fakes for models), scenario tests for midnight alert and truck logged
+- [x] Step 8: Tests (fakes for models), scenario tests for midnight alert and truck logged
 - [ ] Step 9: Streamlit UI for the demo
 - [ ] Step 10: Scalability measurements, VLM comparison table, diagrams
 - [ ] Step 11: README, PDF report, demo videos with voiceover, invite assignments@flytbase.com as collaborator, submit

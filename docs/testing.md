@@ -340,3 +340,29 @@ Final `agent_costs`: 8 rows, $0.053983 total, stored in SQLite (not memory). No 
 2. One summary recommendation misreads simulated zone changes as "patrol or dwell behavior". Zone is the drone's telemetry location, not the object's position, so repeated `entered_zone` events do not show the object patrolling or dwelling.
 3. Answers do not cite the run ID because the preloaded tool context omits it. This is a context/presentation gap, not a database error.
 4. The summary is stored as JSON in `run_summaries.text`; the UI should render it (parse and display the `summary`, `notable_alerts`, `questionable` and `recommendations` fields) rather than printing the raw JSON string.
+
+## Step 8: Scenario Tests and Agent Trace Table (24 Nov 2026)
+
+### How the agent actually calls tools (Part 1 answer)
+It is a **mix**, not one mechanism:
+- The model genuinely chooses tools in a loop. `run_conversation` (`src/agent/__init__.py:517-563`) calls `client.call(..., tools=TOOL_DEFINITIONS)`, reads `result["tool_calls"]`, runs each via `_run_tool`, appends the result as a `role: "tool"` message with `tool_call_id`, and repeats up to `OPENAI_MAX_ROUNDS` (4). Tool choice is `auto`.
+- Before that loop, `cmd_summary`/`cmd_ask` call `_build_tool_results(db, run_id)` and inject the text via `{tool_results}` in the user prompt. The preloaded blocks are: **alerts** (rule_name, severity, timestamp, reason, track_id), **truck tracks** (track_id, class_name, first_seen, last_seen), **truck events** (track_id, event_type, timestamp), **all descriptions** (track_id, status, description, main_colour), and **event counts**, each with `compact_rows` totals/truncation flags.
+- So the digest is fixed preloaded context; additional tool calls are model-chosen. The `ask` template omits `{run_id}`, which is why answers do not cite a run ID. The real trace below has `tools=[none]` — the model answered entirely from the preloaded digest and chose no tool.
+
+### Scenario tests (fakes only, no network or GPU, real file-backed SQLite rows)
+Four tests were added to `tests/test_agent.py`, reusing `ScriptedClient` and `_EventRow` with temporary `.db` files:
+1. **Midnight** — a car track first seen at `23:59:58` fires no `vehicle_at_night` alert, one at `00:00:03` does; a `23:59:55`→`00:00:09` window query returns events from both sides; the fake agent's tool result and answer cite only track 2 and `2026-11-24T00:00:03`.
+2. **Truck logged** — a truck track produces exactly one `heavy_vehicle_logged` alert with severity `info`; running all rules twice does not duplicate it; the fake agent calls `get_alerts` and cites track ID 5.
+3. **Questionable alert** — a truck track with a stored "brick building facade" description appears in `_build_tool_results` together with its `heavy_vehicle_logged` alert, so the digest supports qualification.
+4. **Traces** — one ask writes exactly one trace row with the tools called; a cached summary writes a second row marked `cached` with zero tokens; no stored row contains the key, `Authorization` or `Bearer`.
+
+All tests: `.venv/bin/python -m pytest -q` → `61 passed in 0.71s` (previous total 57, +4).
+
+### Real trace check (Part 4, raw output)
+`.venv/bin/python scripts/ask_agent.py ask 1 "Were any vehicles seen after midnight? Give times and track ids."` returned the 12 vehicle-at-night IDs/times as before, with `stats: model=gpt-5.4-mini prompt_tokens=3600 completion_tokens=270 latency_s=2.611 cost_usd=0.003915 running_total_usd=0.057898`.
+
+`.venv/bin/python scripts/ask_agent.py traces 1`:
+```
+trace 1 time=2026-11-24T09:30:13 mode=ask cached=0 question='Were any vehicles seen after midnight? Give times and track ids.' tools=[none] cost_usd=0.003915
+```
+`tools=[none]` is accurate: this answer came from the preloaded digest, with no model-chosen tool call. The `agent_costs` running total went from $0.053983 to $0.057898.
