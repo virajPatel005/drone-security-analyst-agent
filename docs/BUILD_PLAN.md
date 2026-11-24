@@ -6,7 +6,7 @@ Status key: [ ] todo, [~] in progress, [x] done. Update this file at the end of 
 - [x] Step 1: Environment and checks (Python venv in WSL, ultralytics, confirm CUDA is used, confirm WSL can reach the LM Studio server)
 - [x] Step 2: Sample video, frame sampling, simulated telemetry and simulated clock, plus text-only simulation mode
 - [x] Step 3: YOLO + ByteTrack, convert tracks to events (appeared, entered zone, left, dwell time)
-- [ ] Step 4: SQLite schema and indexing, queries by time and by object
+- [x] Step 4: SQLite schema and indexing, queries by time and by object
 - [ ] Step 5: Rule-based alerts
 - [ ] Step 6: VLM on new-track crops via LM Studio, structured output, stored in the database
 - [ ] Step 7: OpenAI agent: summary, recommendations, follow-up Q&A over stored data

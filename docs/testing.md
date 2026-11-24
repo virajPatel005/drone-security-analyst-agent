@@ -146,4 +146,51 @@ Note: `5.066 fps` is only the sampled-frame rate (`71 / 14.014 s`), not end-to-e
 - **Decoding by frame-index seek costs ~350 ms per sampled frame**, about 8–10× the YOLO+tracker time (~37–46 ms). This dominates end-to-end throughput.
 - **`SAMPLE_RATE_FPS=10`** with `LOST_FRAMES=10` gives a loss window of ~1.0 s (10 sampled frames ≈ 1 s at 10 fps); at 5 fps the window was ~2 s.
 
+## Step 4: SQLite Storage Measurements
+
+Command: `.venv/bin/python scripts/run_tracking.py` on `data/videos/16647865_2160_3840_30fps.mp4` (with storage enabled).
+
+| Metric | Value |
+|--------|-------|
+| Database path | `data/demo.db` |
+| Runs table rows | 1 |
+| Tracks table rows | 52 |
+| Events table rows | 261 |
+
+### Query: events between 23:59:55 and 00:00:09
+
+All 261 events are returned, because the entire demo video (simulated start `2026-11-23T23:59:55`, duration 14.014 s) falls within this window, which crosses midnight.
+
+### Query: events for track 1
+
+| timestamp | event_type | zone | dwell_s |
+|-----------|-----------|------|---------|
+| 2026-11-23T23:59:55 | appeared | gate | 0.0 |
+| 2026-11-23T23:59:55 | entered_zone | gate | 0.0 |
+| 2026-11-23T23:59:58 | entered_zone | garage | 2.9 |
+| 2026-11-24T00:00:01 | entered_zone | driveway | 2.9 |
+| 2026-11-24T00:00:04 | entered_zone | perimeter | 2.9 |
+| 2026-11-24T00:00:07 | entered_zone | gate | 2.9 |
+| 2026-11-24T00:00:09 | left | gate | 2.0 |
+
+### Counts by event type
+
+| event_type | count |
+|-----------|-------|
+| appeared | 56 |
+| entered_zone | 149 |
+| left | 56 |
+
+### Tracks by class
+
+| class | count |
+|-------|-------|
+| car | 23 |
+| person | 18 |
+| motorcycle | 7 |
+| bicycle | 3 |
+| truck | 1 |
+
+Note: the midnight-crossing window query works without special handling because timestamps are stored as full ISO 8601 date‑times (`2026-11-23T23:59:55`), enabling ordinary range comparisons.
+
 The new defaults are: **yolo11s, conf 0.10, imgsz 1280, 10 fps sampling, ByteTrack match_thresh 0.9**.

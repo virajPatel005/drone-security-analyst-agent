@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections import defaultdict
@@ -15,6 +16,7 @@ from src.config.settings import (
     ANNOTATED_MAX_WIDTH,
     ANNOTATED_OUTPUT_DIR,
     CLASS_CATEGORIES,
+    DB_PATH,
     DRONE_ALTITUDE_M,
     LOST_FRAMES,
     MIN_TRACK_FRAMES,
@@ -24,6 +26,7 @@ from src.config.settings import (
     SIM_START_DATETIME,
     VIDEO_PATH,
 )
+from src.storage import init_db, store_run, store_tracks_and_events
 from src.perception.annotated_video import AnnotatedVideoWriter, annotated_video_path
 from src.perception.events import EventBuilder, TrackEvent
 from src.perception.frame_sampler import probe_video
@@ -86,6 +89,32 @@ def main() -> None:
     )
     output_path = annotated_video_path(VIDEO_PATH, ANNOTATED_OUTPUT_DIR)
 
+    # --- storage setup -------------------------------------------------------
+    db_path = DB_PATH
+    # ensure parent directory exists
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = init_db(db_path)
+
+    # We'll store the run after the pipeline finishes; use SIM_START_DATETIME
+    # as the run's start time and capture the tuning settings from the env.
+    tuning_settings = {
+        "yolo_model": os.getenv("YOLO_MODEL_NAME", "yolo11s.pt"),
+        "yolo_conf": float(os.getenv("YOLO_CONF", "0.10")),
+        "yolo_imgsz": int(os.getenv("YOLO_IMGSZ", "1280")),
+        "sample_rate_fps": float(os.getenv("SAMPLE_RATE_FPS", "10.0")),
+        "min_track_frames": MIN_TRACK_FRAMES,
+        "lost_frames": LOST_FRAMES,
+        "tracker_config": os.getenv("TRACKER_CONFIG", "configs/bytetrack_0.9.yaml"),
+    }
+    run_id = store_run(
+        conn,
+        source_video=str(VIDEO_PATH),
+        start_time=SIM_START_DATETIME,
+        tuning_settings=tuning_settings,
+    )
+
+    # -----------------------------------------------------------------------
+
     events: list[TrackEvent] = []
     summaries: dict[int, _TrackSummary] = {}
     tracking_seconds = 0.0
@@ -134,6 +163,11 @@ def main() -> None:
 
     events.extend(builder.finish())
 
+    # ---- store tracks and events in one transaction -------------------------
+    store_tracks_and_events(conn, run_id, events, tuning_settings=tuning_settings)
+    conn.close()
+
+    # -----------------------------------------------------------------------
     dwell_by_track: dict[int, float] = defaultdict(float)
     for event in events:
         if event.dwell_s is not None:
@@ -152,6 +186,7 @@ def main() -> None:
     )
     print(f"device: {tracker.device}")
     print(f"annotated_video: {output_path.resolve()}")
+    print(f"db: {db_path.resolve()}")
 
 
 if __name__ == "__main__":

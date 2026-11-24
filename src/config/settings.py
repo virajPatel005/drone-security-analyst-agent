@@ -61,3 +61,5 @@ DRONE_ALTITUDE_M = float(os.getenv("DRONE_ALTITUDE_M", "30.0"))
 TEST_IMAGES_DIR = PROJECT_ROOT / "data" / "test_images"
 TEST_IMAGE_NAME = os.getenv("TEST_IMAGE_NAME", "multiple_cars.jpg")
 TEST_IMAGE_PATH = TEST_IMAGES_DIR / TEST_IMAGE_NAME
+
+DB_PATH = PROJECT_ROOT / "data" / "demo.db"
