@@ -107,3 +107,10 @@ Dials: `DESIGN_VARIANCE 3`, `MOTION_INTENSITY 2`, `VISUAL_DENSITY 7`. The inform
 - **Primary button label uses `--on-accent`.** Reason: Streamlit renders the label as a `<p>` inside the button, so the global paragraph rule overrode the button's intended colour and produced 1.35:1 / 1.39:1. A targeted rule for that `<p>` restores the 5.77:1 / 6.90:1 pairs already chosen in Step 9B.
 - **Sidebar arrows use `--text`.** Reason: Streamlit 1.67 draws the header controls with its own icon colour and the old `stSidebarCollapseButton` selector no longer matches; when the injected theme and the startup/base theme disagreed the icon was effectively white on white (1.06:1). Both open and close arrows now follow the existing text token in both themes (15.08:1 / 15.65:1).
 
+## Demo CLI duplicate guard (25 Nov 2026)
+
+- **Added `--video`, `--db` and `--force` only to `scripts/run_tracking.py`.** Reason: the human wants to run a new clip into a separate DB during a demo without touching `data/demo.db`. Defaults are the existing `VIDEO_PATH` and `DB_PATH`, so argument-free invocation keeps the same inputs.
+- **Moved model/IO imports into `main()` after `parse_args()`.** Reason: a plain module import measured 2.216 s (ultralytics + OpenCV) and `--help` must be instant and must not load a model. Measured 0.05 s after the change.
+- **Duplicate check opens the target DB with a read-only URI and runs before any import, video open or run insert.** Reason: a check must never create/alter the DB, and a refused duplicate must have zero side effects. A missing file or missing `runs` table means "no match"; `--force` skips the read altogether. Path-based check only — no schema change.
+- **Stored value and check share `normalise_video_path()`.** Reason: `runs.source_video` is a string, so both sides must apply the same `str(Path(...))` form or a valid match could be missed. The run id is printed at the end together with the annotated-video, crops and DB paths.
+

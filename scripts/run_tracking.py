@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import os
+import sqlite3
 import sys
 import time
 from collections import defaultdict
@@ -12,40 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.alerts import ALERT_RULES
-from src.config.settings import (
-    ANNOTATED_MAX_WIDTH,
-    ANNOTATED_OUTPUT_DIR,
-    CLASS_CATEGORIES,
-    DB_PATH,
-    DRONE_ALTITUDE_M,
-    LOST_FRAMES,
-    MIN_TRACK_FRAMES,
-    PATROL_SECONDS_PER_LOCATION,
-    PATROL_WAYPOINTS,
-    SAMPLE_RATE_FPS,
-    SIM_START_DATETIME,
-    VIDEO_PATH,
-    VLM_CROP_MIN_PAD_PX,
-    VLM_CROP_MIN_SHORT_SIDE_PX,
-    VLM_CROP_PAD_RATIO,
-    VLM_CROP_TARGET_SHORT_SIDE_PX,
-    VLM_CROPS_DIR,
-    VLM_ENABLED,
-)
-from src.description import (
-    CropRecord,
-    LmStudioVlmClient,
-    describe_run,
-    save_track_crop,
-)
-from src.indexing import FrameObjectRow, FrameRow, build_frame_index
-from src.storage import init_db, store_frame_index, store_run, store_tracks_and_events
-from src.perception.annotated_video import AnnotatedVideoWriter, annotated_video_path
-from src.perception.events import EventBuilder, TrackEvent
-from src.perception.frame_sampler import probe_video
-from src.perception.tracker import YoloByteTrackTracker
-from src.telemetry.video_stream import video_frame_records
+# Only the two CLI defaults are loaded here. YOLO/OpenCV/model modules are
+# imported inside main() *after* argument parsing, so --help and a refused
+# duplicate never pay their import cost or instantiate a model.
+from src.config.settings import DB_PATH, VIDEO_PATH  # noqa: E402
 
 
 @dataclass
@@ -93,18 +65,138 @@ def _print_track_summary(
         )
 
 
-def main() -> None:
-    metadata = probe_video(VIDEO_PATH)
+def normalise_video_path(video: Path | str) -> str:
+    """Return the string form written to ``runs.source_video`` by ``store_run``.
+
+    Both the stored value and the CLI check go through this one function, so a
+    relative path is compared in exactly the form the pipeline would persist.
+    """
+    return str(Path(video))
+
+
+def existing_run_ids(
+    db_path: Path,
+    source_video: str,
+    *,
+    force: bool = False,
+) -> list[int]:
+    """Return ids of runs for *source_video* that must block a new run.
+
+    The check opens the target database read-only: a missing file or a missing
+    ``runs`` table means there is nothing to compare against, and the check can
+    never create or modify a database. ``--force`` skips the read entirely.
+    """
+    if force:
+        return []
+    path = Path(db_path).resolve()
+    if not path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.OperationalError:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT id FROM runs WHERE source_video = ? ORDER BY id",
+            (source_video,),
+        ).fetchall()
+        return [int(row[0]) for row in rows]
+    except sqlite3.OperationalError:
+        # A file without the runs table cannot hold a matching source_video.
+        return []
+    finally:
+        conn.close()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the demo CLI; the defaults reproduce the old no-argument run."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run YOLO + ByteTrack over sampled frames and emit events plus a demo video."
+        )
+    )
+    parser.add_argument(
+        "--video",
+        type=Path,
+        default=VIDEO_PATH,
+        help=f"video to process (default: {VIDEO_PATH})",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=DB_PATH,
+        help=f"database to write to (default: {DB_PATH})",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="allow reprocessing a video already present in the database",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    video_path = Path(args.video)
+    db_path = Path(args.db)
+    source_video = normalise_video_path(video_path)
+
+    # Refuse duplicates before touching a model, a video or the database.
+    blocking_ids = existing_run_ids(db_path, source_video, force=args.force)
+    if blocking_ids:
+        ids = ", ".join(str(run_id) for run_id in blocking_ids)
+        print(
+            f"Video already processed in {db_path.resolve()} "
+            f"(source_video={source_video}); existing run id(s): {ids}. "
+            "Use --force to reprocess it."
+        )
+        raise SystemExit(2)
+
+    # Deferred until after parsing/the gate: importing ultralytics and OpenCV
+    # takes ~2 s and must not happen for --help or a refused duplicate.
+    from src.alerts import ALERT_RULES
+    from src.config.settings import (
+        ANNOTATED_MAX_WIDTH,
+        ANNOTATED_OUTPUT_DIR,
+        CLASS_CATEGORIES,
+        DRONE_ALTITUDE_M,
+        LOST_FRAMES,
+        MIN_TRACK_FRAMES,
+        PATROL_SECONDS_PER_LOCATION,
+        PATROL_WAYPOINTS,
+        SAMPLE_RATE_FPS,
+        SIM_START_DATETIME,
+        VLM_CROP_MIN_PAD_PX,
+        VLM_CROP_MIN_SHORT_SIDE_PX,
+        VLM_CROP_PAD_RATIO,
+        VLM_CROP_TARGET_SHORT_SIDE_PX,
+        VLM_CROPS_DIR,
+        VLM_ENABLED,
+    )
+    from src.description import (
+        CropRecord,
+        LmStudioVlmClient,
+        describe_run,
+        save_track_crop,
+    )
+    from src.indexing import FrameObjectRow, FrameRow, build_frame_index
+    from src.storage import init_db, store_frame_index, store_run, store_tracks_and_events
+    from src.perception.annotated_video import AnnotatedVideoWriter, annotated_video_path
+    from src.perception.events import EventBuilder, TrackEvent
+    from src.perception.frame_sampler import probe_video
+    from src.perception.tracker import YoloByteTrackTracker
+    from src.telemetry.video_stream import video_frame_records
+
+    metadata = probe_video(video_path)
     tracker = YoloByteTrackTracker()
     builder = EventBuilder(
         min_track_frames=MIN_TRACK_FRAMES,
         lost_frames=LOST_FRAMES,
         class_categories=CLASS_CATEGORIES,
     )
-    output_path = annotated_video_path(VIDEO_PATH, ANNOTATED_OUTPUT_DIR)
+    output_path = annotated_video_path(video_path, ANNOTATED_OUTPUT_DIR)
 
     # --- storage setup -------------------------------------------------------
-    db_path = DB_PATH
     # ensure parent directory exists
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
@@ -122,7 +214,7 @@ def main() -> None:
     }
     run_id = store_run(
         conn,
-        source_video=str(VIDEO_PATH),
+        source_video=source_video,
         start_time=SIM_START_DATETIME,
         tuning_settings=tuning_settings,
     )
@@ -152,7 +244,7 @@ def main() -> None:
         max_width=ANNOTATED_MAX_WIDTH,
     ) as writer:
         for record in video_frame_records(
-            VIDEO_PATH,
+            video_path,
             sample_rate_fps=SAMPLE_RATE_FPS,
             start_time=SIM_START_DATETIME,
             waypoints=PATROL_WAYPOINTS,
@@ -284,7 +376,9 @@ def main() -> None:
         f"{(tracking_seconds / sampled_frames * 1000) if sampled_frames else 0.0:.2f}"
     )
     print(f"device: {tracker.device}")
+    print(f"run_id: {run_id}")
     print(f"annotated_video: {output_path.resolve()}")
+    print(f"crops: {crops_dir.resolve()}")
     print(f"db: {db_path.resolve()}")
     if description_summary is None:
         print("vlm: disabled")

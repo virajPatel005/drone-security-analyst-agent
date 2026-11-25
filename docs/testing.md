@@ -779,3 +779,19 @@ Five vision models were already available in LM Studio and were compared on the 
 ### Not run
 - No demo video, PDF report, README or other Step 11 work; no commit. Changes are left for human inspection.
 
+## Demo CLI duplicate guard (25 Nov 2026)
+
+### What changed
+- `scripts/run_tracking.py`: `--video`, `--db`, `--force`; read-only duplicate check before any model/video/DB work; model imports deferred until after parsing; `run_id` and the annotated-video, crops and DB paths printed at the end.
+- `tests/test_run_tracking_cli.py`: three no-model tests using a temporary DB.
+
+### Verification (no model calls)
+- Import timing of the unmodified script: **2.216 s** (`python -c "import run_tracking"`).
+- `/usr/bin/time -f 'elapsed_seconds: %e' python scripts/run_tracking.py --help` → usage with `--video`, `--db`, `--force`, exit 0, **0.05 s**. The test also passes explicit temp `--db`/`--video` paths with `--help` and asserts neither file is created.
+- `.venv/bin/python -m pytest -q` → **102 passed in 3.79s** (was 99; +3).
+- Read-only `data/demo.db` before and after: **524288 bytes**, runs **2**, tracks **33/23**. Gate on the two stored `source_video` values returned `[1]` and `[2]`; on a new filename it returned `[]`. Size unchanged after every check.
+- `git diff --stat` at the end: `scripts/run_tracking.py`, `docs/ai-tools-log.md`, `docs/design-decisions.md`, `docs/testing.md` changed; new untracked `tests/test_run_tracking_cli.py`.
+
+### Not run
+- No pipeline run, no benchmark, no OpenAI/LM Studio call, no write to `data/demo.db`, no commit. The untracked `docs/report.md` and `docs/report_assets/` were left untouched.
+
