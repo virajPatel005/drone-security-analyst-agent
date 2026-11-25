@@ -167,4 +167,8 @@ The opencode assistant wrote code, tests and docs, ran no-model checks and inter
 
 ## Demo videos and PDF report
 
-To be added.
+
+- Demo video (screen recording with voiceover): https://drive.google.com/file/d/1Sy9bsv4Usbu_2LT1F3yGv-TieIQR8ayn/view?usp=sharing
+- PDF report: https://drive.google.com/file/d/1Nn5o3ebPbQ3DTBbsCGM-dbnIzxpJBXEW/view?usp=sharing
+
+The PDF is built from `docs/report.md`, which is in the repository with its diagrams in `docs/report_assets/`. The PDF itself is gitignored, so it is linked here instead.
