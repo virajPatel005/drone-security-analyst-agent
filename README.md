@@ -70,13 +70,16 @@ Streamlit UI (read-only, from the repo root):
 streamlit run app/streamlit_app.py
 ```
 
+
+A separate branch, `demo-pipeline-cli`, adds `--video`, `--db` and `--force` options to `scripts/run_tracking.py` so a new clip can be processed into its own scratch database without touching `data/demo.db`. It also refuses a video already processed in that database. It is demo tooling and is not merged into `main`; all measured results here come from the two original clips.
+
 ## What is in the repo vs what you generate
 
 From a fresh clone, the text-simulation demo works with no models and no video: the scenarios are committed in `data/scenarios/`, and the script creates `data/text_demo.db` itself.
 
 The full video pipeline needs the two clips in `data/videos/`, a CUDA GPU and LM Studio; it creates `data/demo.db`. The Streamlit UI and the agent examples (`summary`, `ask`, `traces` and `query_frames.py --run 2`) need a generated `data/demo.db`, and the agent also needs an OpenAI key in `.env`. `.db` files and videos are gitignored, so neither is in the repo. The demo videos (to be added) show the full pipeline.
 
-Source of the two sample clips: downloaded from Pexels (pexels.com, aerial video search). The individual clip page links were not recorded.
+Source of the two sample clips: downloaded from the internet, probably from Pexels stock video (pexels.com, aerial video search); the original page links were not recorded.
 
 ## Sample outputs
 
@@ -141,7 +144,7 @@ Only numbers already recorded in [docs/testing.md](docs/testing.md); no new meas
 - End-to-end about **0.20 s per sampled frame**, **5.16 / 4.76 sampled frames/s** (0.51× / 0.47× real time) on the two real clips; frame-index seek decode dominates.
 - Sequential decode measured **42–54× faster** than seeking in the benchmark, but it is not implemented in the pipeline.
 - VLM calls scale with new tracks, not frames: 33 calls for 33 tracks on run 1, 11 calls for 23 tracks on run 2 (12 crops too small), about 1.2 s per call.
-- Agent average: ~3.8k prompt + 305 completion tokens, **$0.0042 and 2.5 s per question**; total OpenAI spend $0.09634725.
+- Agent average: ~3.8k prompt + 305 completion tokens, **$0.0042 and 2.5 s per question**; total OpenAI spend was $0.09634725 at the Step 10 measurements and $0.13209075 across 25 cost rows by submission (well under the $1.00 cap).
 - SYNTHETIC, NOT VIDEO: the `(run_id, timestamp)` index keeps time-window queries at ~0.03 ms even at 1 M frames (130 ms without).
 - EXTRAPOLATION, NOT MEASURED: one hour of footage ≈ 2.0 h as written, or ~22 min with sequential decoding; ten drones ≈ 20 GPU-equivalents at current throughput.
 - YOLO supplies counts and classes; VLM text is fallible context, not ground truth.
