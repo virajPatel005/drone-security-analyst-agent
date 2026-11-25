@@ -28,9 +28,11 @@ from src.storage import (
     query_tracks_by_class,
 )
 
-# The event model maps every road vehicle to "vehicle" and people to "person";
-# counts must cover both, so the class list is kept here rather than in a page.
-_TRACK_CLASSES = ("vehicle", "person")
+# `tracks.class_name` stores the concrete class emitted by the tracker (car,
+# truck, ...), while only `events.class_name` uses the abstract "vehicle" /
+# "person" categories.  Counting the abstract names returns zero for real runs,
+# so use the same concrete list the pipeline is configured to track.
+_TRACK_CLASSES = settings.TRACKED_CLASSES
 
 
 @dataclass(frozen=True)

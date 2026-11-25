@@ -87,6 +87,9 @@ button, [data-testid="stButton"] button, [data-testid="stToggle"] label,
 [data-testid="stButton"] button[kind="primary"], [data-testid="stButton"] button[data-testid="baseButton-primary"] {
   background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600;
 }
+/* Streamlit renders the label as a <p> inside the button. Without this, the
+   general paragraph rule below paints it with --text-secondary on --accent. */
+[data-testid="stButton"] button[kind="primary"] p { color:var(--on-accent) !important; font-weight:600; }
 [data-testid="stButton"] button:hover:not(:disabled) { background:var(--accent-soft); border-color:var(--accent); }
 [data-testid="stButton"] button[kind="primary"]:hover:not(:disabled) { background:var(--accent); filter:brightness(1.08); }
 [data-testid="stButton"] button:active:not(:disabled) { transform:translateY(1px); }
@@ -120,13 +123,25 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [role="combob
 [data-testid="stMetric"] { background:var(--panel); border:1px solid var(--border); border-radius:var(--r-panel); padding:var(--s3); }
 [data-testid="stMetric"] [data-testid="stMetricValue"] { font-family:var(--mono); font-variant-numeric:tabular-nums;
      font-size:22px; color:var(--text); }
-[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapseButton"] {
-  min-width:40px; min-height:40px; border-radius:var(--r-control);
+/* Streamlit 1.67 paints both header controls with its own icon colour; the old
+   stSidebarCollapseButton selector no longer matches. Align both arrows with
+   our text token so they stay visible when the injected theme and the
+   startup/base theme disagree. */
+[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapseButton"],
+[data-testid="stBaseButton-headerNoPadding"][aria-label="Collapse sidebar"] {
+  min-width:40px; min-height:40px; border-radius:var(--r-control); color:var(--text) !important;
+}
+[data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"],
+[data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"],
+[data-testid="stBaseButton-headerNoPadding"][aria-label="Collapse sidebar"] [data-testid="stIconMaterial"] {
+  color:var(--text) !important;
 }
 [data-testid="stExpander"] details { border:1px solid var(--border); border-radius:var(--r-panel); background:var(--panel); }
 [data-testid="stExpander"] summary { padding:var(--s2) var(--s3); color:var(--text); }
 [data-testid="stAlert"] { border-radius:var(--r-panel); border:1px solid var(--border); }
-[data-testid="stAlertContainer"] p { font-size:12px; }
+/* Let st.warning keep Streamlit's own amber-on-tinted text pair. The general
+   paragraph rule above is meant for page copy, not for alert surfaces. */
+[data-testid="stAlertContainer"] p { font-size:12px; color:inherit !important; }
 /* Streamlit 1.67 st.badge emits .stMarkdownBadge with inline light-mode colours
    and no data-testid, so the semantic warning colours need !important here. */
 span.stMarkdownBadge, [data-testid="stBadge"] { background:var(--warning-bg) !important;

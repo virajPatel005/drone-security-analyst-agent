@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from src.config import settings
-from src.storage import init_db, record_agent_call
+from src.storage import init_db, record_agent_call, store_run, store_tracks_and_events
 
 from app import data
 
@@ -48,7 +50,7 @@ def test_midnight_alerts_filters_and_provenance(app_db: Path) -> None:
 
         provenance = data.get_provenance(conn, info[0])
         assert provenance.track is not None
-        assert provenance.track.class_name == "vehicle"
+        assert provenance.track.class_name == "truck"
         assert provenance.track.event_count == 3
         assert [event.event_type for event in provenance.events] == [
             "appeared",
@@ -120,6 +122,63 @@ def test_agent_state_key_and_cap(app_db: Path, monkeypatch) -> None:
         capped = data.agent_state(conn)
         assert capped.can_call is False
         assert "cap reached" in capped.blocked_reason
+    finally:
+        conn.close()
+
+
+def test_run_counts_and_provenance_use_stored_detection_classes(tmp_path: Path) -> None:
+    """Regression: tracks store concrete classes, not event-style categories."""
+
+    db_path = tmp_path / "classes.db"
+    conn = init_db(db_path)
+    run_id = store_run(
+        conn,
+        source_video=str(tmp_path / "clip.mp4"),
+        start_time=datetime(2026, 11, 24, 14, 0, 0),
+        tuning_settings={},
+    )
+
+    def event(track_id: int, class_name: str, kind: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            track_id=track_id,
+            event_type=kind,
+            timestamp=datetime(2026, 11, 24, 14, 0, track_id),
+            zone="driveway",
+            dwell_s=0.0,
+            class_name=class_name,
+            end_of_video=kind == "left",
+            confidence=0.9,
+        )
+
+    # Real runs store car/truck in tracks.class_name, not the abstract
+    # "vehicle"/"person" categories used by events.class_name.
+    events = [
+        event(1, "car", "appeared"),
+        event(1, "car", "left"),
+        event(2, "truck", "appeared"),
+        event(2, "truck", "left"),
+    ]
+    store_tracks_and_events(conn, run_id, events)
+    conn.close()
+
+    conn = data.connect_read_only(db_path)
+    try:
+        counts = data.run_counts(conn, run_id)
+        assert (counts.tracks, counts.events) == (2, 4)
+
+        alert = data.AlertView(
+            id=1,
+            run_id=run_id,
+            track_id=2,
+            rule_name="heavy_vehicle_logged",
+            severity="info",
+            timestamp="2026-11-24T14:00:02",
+            reason="truck logged",
+            zone="driveway",
+        )
+        provenance = data.get_provenance(conn, alert)
+        assert provenance.track is not None
+        assert provenance.track.class_name == "truck"
     finally:
         conn.close()
 

@@ -34,14 +34,24 @@ def app_db(tmp_path: Path) -> Path:
         tuning_settings={"yolo_model": "yolo11s.pt", "sample_rate_fps": 10.0},
     )
 
-    def event(track_id: int, kind: str, when: datetime, zone: str, *, dwell: float = 0.0):
+    def event(
+        track_id: int,
+        kind: str,
+        when: datetime,
+        zone: str,
+        *,
+        dwell: float = 0.0,
+        class_name: str = "car",
+    ):
+        # Real runs store concrete YOLO classes in tracks.class_name; using the
+        # abstract "vehicle" category here used to hide the UI count defect.
         return SimpleNamespace(
             track_id=track_id,
             event_type=kind,
             timestamp=when,
             zone=zone,
             dwell_s=dwell,
-            class_name="vehicle",
+            class_name=class_name,
             end_of_video=kind == "left",
             confidence=0.8,
         )
@@ -53,9 +63,9 @@ def app_db(tmp_path: Path) -> Path:
         event(2, "left", datetime(2026, 11, 24, 0, 0, 5), "gate"),
         event(3, "appeared", datetime(2026, 11, 24, 0, 0, 3), "garage"),
         event(3, "left", datetime(2026, 11, 24, 0, 0, 9), "garage"),
-        event(5, "appeared", datetime(2026, 11, 24, 0, 0, 4), "driveway"),
-        event(5, "entered_zone", datetime(2026, 11, 24, 0, 0, 6), "driveway"),
-        event(5, "left", datetime(2026, 11, 24, 0, 0, 10), "driveway"),
+        event(5, "appeared", datetime(2026, 11, 24, 0, 0, 4), "driveway", class_name="truck"),
+        event(5, "entered_zone", datetime(2026, 11, 24, 0, 0, 6), "driveway", class_name="truck"),
+        event(5, "left", datetime(2026, 11, 24, 0, 0, 10), "driveway", class_name="truck"),
     ]
     store_tracks_and_events(conn, run_id, events)
 

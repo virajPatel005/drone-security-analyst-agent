@@ -759,3 +759,23 @@ Five vision models were already available in LM Studio and were compared on the 
 - `data/demo.db` read-only check after all measurements: runs **2**; tracks **33/23**; alerts **22/11**; frames **167/184**; `agent_costs` **19** rows, total **$0.09634725**. Unchanged from baseline.
 - No OpenAI call was made; no `.db`, crop or video was written inside the repo; no dependency was added; no external site was visited.
 
+## UI cleanup before Step 11 (24 Nov 2026)
+
+### What changed
+- `app/data.py`: `_TRACK_CLASSES` is now `settings.TRACKED_CLASSES` (concrete tracker classes), replacing the abstract `vehicle`/`person` names that never matched `tracks.class_name`.
+- `app/styles.py`: the warning `<p>` inherits Streamlit's alert colour; the primary-button `<p>` uses `--on-accent`; both sidebar arrow icons use `--text`, and the stale `stSidebarCollapseButton` selector now also covers Streamlit 1.67's real collapse button.
+- `tests/conftest.py` / `tests/test_app_data.py`: the shared fixture stores realistic `car`/`truck` classes and one new regression test pins concrete-class counting and provenance lookup.
+
+### Verification (no model calls)
+- `.venv/bin/python -m pytest -q` → **99 passed in 4.00s** (was 98; +1 regression test). No OpenAI key was needed; agent entry points were not called.
+- Read-only `app.data.run_counts` after the fix: `run 1 -> RunCounts(tracks=33, events=166, alerts=22)`, `run 2 -> RunCounts(tracks=23, events=105, alerts=11)`.
+- Browser check on the read-only server (dummy key only for button gating; **Confirm question** and **Confirm spend** were never clicked): Overview run 1 shows Tracks 33 / Events 166 / Alerts 22; run 2 shows Tracks 23 / Events 105 / Alerts 11.
+- Computed colours after the fix, with the Step 9B WCAG method:
+  - Ask label: light `#F7FAFA` on `#176C7B` = **5.77:1**, dark `#071115` on `#5BA6B8` = **6.90:1** (was 1.35:1 / 1.39:1).
+  - Confirmation line inherits Streamlit's own warning text: with `prefers-color-scheme: dark`, measured `#FBD54F` on `#302917` = **10.12:1**; the declared light pair `#956B0F` on `#FFFAE5` = **4.57:1**. Both clear AA 4.5:1.
+  - Sidebar arrows use `--text`: light `#162228` on `#F4F7F8` = **15.08:1**, dark `#E6EDF0` on `#0F1418` = **15.65:1**. Measured icon colours matched those tokens in both injected themes, including the previously failing light-injected/dark-base case (was 1.06:1).
+- `data/demo.db` mtime and size were unchanged (516096 bytes, 14:45:49 UTC); the temporary server was stopped and port 8501 was free afterwards.
+
+### Not run
+- No demo video, PDF report, README or other Step 11 work; no commit. Changes are left for human inspection.
+
